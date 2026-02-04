@@ -7,6 +7,7 @@ export async function GET() {
       return NextResponse.json({ error: "OPENAI_API_KEY missing" }, { status: 500 });
     }
     
+
     // Config base de la sesión Realtime (voz + reglas)
     const sessionConfig = {
       session: {
