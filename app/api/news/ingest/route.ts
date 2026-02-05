@@ -48,7 +48,7 @@ async function parseRSS(feedUrl: string): Promise<Array<{title: string, link: st
     // Simple XML parsing for RSS items
     const itemMatches = xml.match(/<item[^>]*>[\s\S]*?<\/item>/gi) || []
     
-    for (const itemXml of itemMatches.slice(0, 15)) { // Max 15 per source para filtrar
+    for (const itemXml of itemMatches.slice(0, 50)) { // Max 50 per source para filtrar
       const title = itemXml.match(/<title[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/i)?.[1]?.trim() || ""
       const link = itemXml.match(/<link[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/link>/i)?.[1]?.trim() || ""
       const description = itemXml.match(/<description[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/description>/i)?.[1]?.trim() || ""
@@ -57,7 +57,7 @@ async function parseRSS(feedUrl: string): Promise<Array<{title: string, link: st
       const publishedAt = pubDate ? new Date(pubDate) : null
       
       // SOLO agregar si es de HOY
-      if (title && link && isToday(publishedAt)) {
+      if (title && link) {
         items.push({
           title: title.replace(/<[^>]*>/g, "").trim(),
           link: link.replace(/<[^>]*>/g, "").trim(),
@@ -144,9 +144,22 @@ export async function POST(request: Request) {
 }
 
 // GET para obtener las noticias del día
-export async function GET() {
+export async function GET(request: Request) {
   if (process.env.DATABASE_URL) {
     try {
+      const cronHeader = request.headers.get("x-vercel-cron")
+      const cronSecret = process.env.CRON_SECRET
+
+      // Permitir:
+      // 1) Cron de Vercel (x-vercel-cron)
+      // 2) POST manual con Authorization (para pruebas)
+      if (!cronHeader && cronSecret) {
+        const auth = request.headers.get("authorization")
+        if (auth !== `Bearer ${cronSecret}`) {
+          return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+        }
+      }
+
       const { neon } = await import("@neondatabase/serverless")
       const sql = neon(process.env.DATABASE_URL)
       

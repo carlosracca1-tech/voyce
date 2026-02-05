@@ -1,11 +1,36 @@
 import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 
+export const runtime = "nodejs"
+
+// --- helpers: HOY Argentina (UTC-3 fijo) ---
+function getARDateParts(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Argentina/Buenos_Aires",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now)
+
+  const y = Number(parts.find((p) => p.type === "year")?.value)
+  const m = Number(parts.find((p) => p.type === "month")?.value)
+  const d = Number(parts.find((p) => p.type === "day")?.value)
+  return { y, m, d }
+}
+
+function arDayRangeUTC(now = new Date()) {
+  // Inicio del día AR (00:00 AR) = 03:00 UTC
+  const { y, m, d } = getARDateParts(now)
+  const startUTC = new Date(Date.UTC(y, m - 1, d, 3, 0, 0))
+  const endUTC = new Date(startUTC.getTime() + 24 * 60 * 60 * 1000)
+  return { startUTC, endUTC }
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url)
     const category = searchParams.get("category")
-    const limit = Math.min(parseInt(searchParams.get("limit") || "20"), 50)
+    const limit = Math.min(parseInt(searchParams.get("limit") || "20", 10), 50)
 
     // Si no hay DATABASE_URL, devolver noticias demo
     if (!process.env.DATABASE_URL) {
@@ -52,9 +77,7 @@ export async function GET(request: Request) {
         },
       ]
 
-      const filtered = category
-        ? demoNews.filter((n) => n.category === category)
-        : demoNews
+      const filtered = category ? demoNews.filter((n) => n.category === category) : demoNews
 
       return NextResponse.json({
         ok: true,
@@ -66,26 +89,49 @@ export async function GET(request: Request) {
 
     const sql = neon(process.env.DATABASE_URL)
 
-    // Obtener noticias de hoy
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
+    const { startUTC, endUTC } = arDayRangeUTC()
 
+    // HOY Argentina:
+    // - Preferimos published_at dentro del rango
+    // - Si published_at es null, usamos fetched_at como fallback
     let news
     if (category) {
       news = await sql`
-        SELECT id, source, title, summary, category, link, published_at
+        SELECT id, source, title, summary, category, link, published_at, fetched_at
         FROM news_articles
-        WHERE fetched_at >= ${today.toISOString()}
+        WHERE
+          (
+            published_at IS NOT NULL
+            AND published_at >= ${startUTC.toISOString()}
+            AND published_at <  ${endUTC.toISOString()}
+          )
+          OR
+          (
+            published_at IS NULL
+            AND fetched_at >= ${startUTC.toISOString()}
+            AND fetched_at <  ${endUTC.toISOString()}
+          )
         AND category = ${category}
-        ORDER BY published_at DESC
+        ORDER BY published_at DESC NULLS LAST, fetched_at DESC
         LIMIT ${limit}
       `
     } else {
       news = await sql`
-        SELECT id, source, title, summary, category, link, published_at
+        SELECT id, source, title, summary, category, link, published_at, fetched_at
         FROM news_articles
-        WHERE fetched_at >= ${today.toISOString()}
-        ORDER BY published_at DESC
+        WHERE
+          (
+            published_at IS NOT NULL
+            AND published_at >= ${startUTC.toISOString()}
+            AND published_at <  ${endUTC.toISOString()}
+          )
+          OR
+          (
+            published_at IS NULL
+            AND fetched_at >= ${startUTC.toISOString()}
+            AND fetched_at <  ${endUTC.toISOString()}
+          )
+        ORDER BY published_at DESC NULLS LAST, fetched_at DESC
         LIMIT ${limit}
       `
     }
@@ -95,6 +141,7 @@ export async function GET(request: Request) {
       news,
       total: news.length,
       isDemo: false,
+      day: { startUTC: startUTC.toISOString(), endUTC: endUTC.toISOString() },
     })
   } catch (error) {
     console.error("News fetch error:", error)
