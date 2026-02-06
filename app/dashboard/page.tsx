@@ -135,7 +135,7 @@ useEffect(() => {
       } catch (err) {
         // si falla, queda conversacion por default
       }
-})()
+    })()
 
     // ✅ leer modo preferido desde ajustes (mismo naming que Settings)
     const rawSettings = localStorage.getItem("voyce_settings")
