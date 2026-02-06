@@ -42,6 +42,7 @@ export async function GET(request: Request) {
           summary: "Un nuevo informe destaca el crecimiento del ecosistema startup argentino.",
           category: "tecnologia",
           published_at: new Date().toISOString(),
+          importance_score: 20,
         },
         {
           id: 2,
@@ -50,6 +51,7 @@ export async function GET(request: Request) {
           summary: "Los mercados financieros muestran señales de recuperación.",
           category: "economia",
           published_at: new Date().toISOString(),
+          importance_score: 80,
         },
         {
           id: 3,
@@ -58,6 +60,7 @@ export async function GET(request: Request) {
           summary: "El superclásico del fútbol argentino promete emociones.",
           category: "deportes",
           published_at: new Date().toISOString(),
+          importance_score: -50,
         },
         {
           id: 4,
@@ -66,6 +69,7 @@ export async function GET(request: Request) {
           summary: "El gobierno anunció un paquete de incentivos para PyMEs.",
           category: "economia",
           published_at: new Date().toISOString(),
+          importance_score: 75,
         },
         {
           id: 5,
@@ -74,10 +78,14 @@ export async function GET(request: Request) {
           summary: "El servicio meteorológico emitió un alerta amarilla.",
           category: "general",
           published_at: new Date().toISOString(),
+          importance_score: 0,
         },
       ]
 
       const filtered = category ? demoNews.filter((n) => n.category === category) : demoNews
+
+      // ✅ orden editorial en demo
+      filtered.sort((a, b) => (b.importance_score ?? 0) - (a.importance_score ?? 0))
 
       return NextResponse.json({
         ok: true,
@@ -88,50 +96,45 @@ export async function GET(request: Request) {
     }
 
     const sql = neon(process.env.DATABASE_URL)
-
     const { startUTC, endUTC } = arDayRangeUTC()
 
     // HOY Argentina:
     // - Preferimos published_at dentro del rango
     // - Si published_at es null, usamos fetched_at como fallback
+    // ✅ Además: priorizamos por importance_score para evitar “relleno”
+    const dayWhere = sql`
+      (
+        (
+          published_at IS NOT NULL
+          AND published_at >= ${startUTC.toISOString()}
+          AND published_at <  ${endUTC.toISOString()}
+        )
+        OR
+        (
+          published_at IS NULL
+          AND fetched_at >= ${startUTC.toISOString()}
+          AND fetched_at <  ${endUTC.toISOString()}
+        )
+      )
+      AND importance_score > 5
+    `
+
     let news
     if (category) {
       news = await sql`
-        SELECT id, source, title, summary, category, link, published_at, fetched_at
+        SELECT id, source, title, summary, category, link, published_at, fetched_at, importance_score
         FROM news_articles
-        WHERE
-          (
-            published_at IS NOT NULL
-            AND published_at >= ${startUTC.toISOString()}
-            AND published_at <  ${endUTC.toISOString()}
-          )
-          OR
-          (
-            published_at IS NULL
-            AND fetched_at >= ${startUTC.toISOString()}
-            AND fetched_at <  ${endUTC.toISOString()}
-          )
-        AND category = ${category}
-        ORDER BY published_at DESC NULLS LAST, fetched_at DESC
+        WHERE ${dayWhere}
+          AND category = ${category}
+        ORDER BY importance_score DESC, published_at DESC NULLS LAST, fetched_at DESC
         LIMIT ${limit}
       `
     } else {
       news = await sql`
-        SELECT id, source, title, summary, category, link, published_at, fetched_at
+        SELECT id, source, title, summary, category, link, published_at, fetched_at, importance_score
         FROM news_articles
-        WHERE
-          (
-            published_at IS NOT NULL
-            AND published_at >= ${startUTC.toISOString()}
-            AND published_at <  ${endUTC.toISOString()}
-          )
-          OR
-          (
-            published_at IS NULL
-            AND fetched_at >= ${startUTC.toISOString()}
-            AND fetched_at <  ${endUTC.toISOString()}
-          )
-        ORDER BY published_at DESC NULLS LAST, fetched_at DESC
+        WHERE ${dayWhere}
+        ORDER BY importance_score DESC, published_at DESC NULLS LAST, fetched_at DESC
         LIMIT ${limit}
       `
     }
@@ -145,9 +148,6 @@ export async function GET(request: Request) {
     })
   } catch (error) {
     console.error("News fetch error:", error)
-    return NextResponse.json(
-      { error: "internal_error", message: "Error al obtener noticias" },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: "internal_error", message: "Error al obtener noticias" }, { status: 500 })
   }
 }

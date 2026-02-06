@@ -1,0 +1,39 @@
+<svg viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="voyceGrad" x1="0%" y1="50%" x2="100%" y2="50%">
+      <stop offset="0%" stop-color="#00d4ff" />
+      <stop offset="50%" stop-color="#ff00aa" />
+      <stop offset="100%" stop-color="#a855f7" />
+    </linearGradient>
+    <linearGradient id="dotGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00d4ff" />
+      <stop offset="50%" stop-color="#ff00aa" />
+      <stop offset="100%" stop-color="#a855f7" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Outer ring (thick) -->
+  <circle cx="256" cy="256" r="240" stroke="url(#voyceGrad)" stroke-width="12" fill="none" />
+  
+  <!-- Inner ring (thin) -->
+  <circle cx="256" cy="256" r="190" stroke="url(#voyceGrad)" stroke-width="3" fill="none" opacity="0.5" />
+  
+  <!-- V shape - two separate lines -->
+  <path
+    d="M145 165L256 340"
+    stroke="url(#voyceGrad)"
+    stroke-width="30"
+    stroke-linecap="round"
+    fill="none"
+  />
+  <path
+    d="M256 340L367 165"
+    stroke="url(#voyceGrad)"
+    stroke-width="30"
+    stroke-linecap="round"
+    fill="none"
+  />
+  
+  <!-- Top dot - centered above the V vertex -->
+  <circle cx="256" cy="115" r="40" fill="url(#dotGrad)" />
+</svg>

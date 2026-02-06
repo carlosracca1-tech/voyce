@@ -19,12 +19,20 @@ export default function Dashboard() {
   const [user, setUser] = useState<UserData | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
 
+  // 👇 PEGALO ACÁ
+  const handleLogout = () => {
+    setMenuOpen(false)
+    localStorage.removeItem("voyce_user")
+    localStorage.removeItem("voyce_settings")
+    router.push("/")
+  }
+
   // UI/estado de VOYCE
   const [activeMode, setActiveMode] = useState<Mode>("conversacion")
-  const [isListening, setIsListening] = useState(false)   // live (webrtc abierto)
+  const [isListening, setIsListening] = useState(false) // live (webrtc abierto)
   const [isProcessing, setIsProcessing] = useState(false) // conectando
-  const [isSpeaking, setIsSpeaking] = useState(false)     // “aprox”: mientras pedimos response
-  const [currentText, setCurrentText] = useState("")      // transcripción
+  const [isSpeaking, setIsSpeaking] = useState(false) // “aprox”: mientras pedimos response
+  const [currentText, setCurrentText] = useState("") // transcripción
   const [audioLevel, setAudioLevel] = useState(0)
 
   const menuRef = useRef<HTMLDivElement | null>(null)
@@ -62,7 +70,6 @@ export default function Dashboard() {
   }
 
   const requestResponse = (instructions?: string) => {
-    // “aprox”: lo usamos para UI
     setIsSpeaking(true)
     sendEvent({
       type: "response.create",
@@ -75,7 +82,6 @@ export default function Dashboard() {
 
   const ensureMic = async () => {
     if (micStreamRef.current) return micStreamRef.current
-    // Pedimos permiso SOLO con gesto (cuando toca orbe)
     micStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true })
     return micStreamRef.current
   }
@@ -100,29 +106,100 @@ export default function Dashboard() {
     return () => document.removeEventListener("click", handleClickOutside)
   }, [menuOpen])
 
-  // ---------- Auth local ----------
-  useEffect(() => {
-    const stored = localStorage.getItem("voyce_user")
-    if (!stored) {
-      router.push("/")
-      return
-    }
-    try {
-      const userData = JSON.parse(stored)
-      setUser(userData)
-    } catch {
-      router.push("/")
-    }
-  }, [router])
-
-  const handleLogout = () => {
-    setMenuOpen(false)
-    localStorage.removeItem("voyce_user")
-    localStorage.removeItem("voyce_settings")
+  // ---------- Auth local + modo preferido ----------
+useEffect(() => {
+  const stored = localStorage.getItem("voyce_user")
+  if (!stored) {
     router.push("/")
+    return
   }
 
-  // ---------- Precarga de titulares HOY (apenas abre la app) ----------
+  try {
+    const userData = JSON.parse(stored)
+    setUser(userData)
+
+    // ✅ cargar settings desde DB y setear defaults del dashboard
+    ;(async () => {
+      try {
+        const res = await fetch(
+          `/api/user/settings?userId=${userData.id}`,
+          { cache: "no-store" }
+        )
+
+        const data = await res.json()
+
+        if (data?.ok && data?.settings) {
+          const preferred = data.settings.preferred_mode
+          setActiveMode(preferred === "podcast" ? "podcast" : "conversacion")
+        }
+      } catch (err) {
+        // si falla, queda conversacion por default
+      }
+})()
+
+
+
+    // ✅ leer modo preferido desde ajustes (mismo naming que Settings)
+    const rawSettings = localStorage.getItem("voyce_settings")
+    if (rawSettings) {
+      try {
+        const s = JSON.parse(rawSettings)
+
+        // migración por si quedó algo viejo ("chat"/"news")
+        const preferred =
+          s?.preferredMode === "podcast"
+            ? "podcast"
+            : s?.preferredMode === "conversacion"
+              ? "conversacion"
+              : s?.preferredMode === "chat"
+                ? "conversacion"
+                : s?.preferredMode === "news"
+                  ? "conversacion"
+                  : null
+
+        if (preferred === "podcast" || preferred === "conversacion") {
+          setActiveMode(preferred)
+        }
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    router.push("/")
+  }
+}, [router])
+
+useEffect(() => {
+  if (!user?.token) return
+
+  ;(async () => {
+    try {
+      const res = await fetch("/api/user/settings", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${user.token}` },
+        cache: "no-store",
+      })
+      const data = await res.json()
+      if (!data?.ok || !data?.settings) return
+
+      const pm = (data.settings.preferred_mode ?? data.settings.preferredMode ?? "conversacion").toString().toLowerCase()
+      setActiveMode(pm === "podcast" ? "podcast" : "conversacion")
+
+      // opcional: guardar local para fallback/offline
+      localStorage.setItem("voyce_settings", JSON.stringify({
+        voiceSpeed: Number(data.settings.voice_speed ?? 1),
+        preferredMode: pm === "podcast" ? "podcast" : "conversacion",
+        autoListen: Boolean(data.settings.auto_listen ?? true),
+        darkMode: Boolean(data.settings.dark_mode ?? true),
+      }))
+    } catch {
+      // ignore
+    }
+  })()
+}, [user?.token])
+
+
+  // ---------- Precarga de titulares HOY ----------
   useEffect(() => {
     let cancelled = false
 
@@ -146,7 +223,7 @@ export default function Dashboard() {
     }
   }, [])
 
-  // ---------- Animación audio level (cosmética) ----------
+  // ---------- Animación audio level ----------
   useEffect(() => {
     if (isListening || isSpeaking) {
       const interval = setInterval(() => setAudioLevel(Math.random() * 100), 100)
@@ -155,6 +232,32 @@ export default function Dashboard() {
       setAudioLevel(0)
     }
   }, [isListening, isSpeaking])
+
+  // ---------- Suscripción (badge como antes) ----------
+  const subscriptionBadge = useMemo(() => {
+    const s = user?.subscription
+    const status = (s?.status || "beta").toLowerCase()
+
+    let label = "BETA - Acceso gratuito"
+    if (status === "active") label = "PRO - Activo"
+    else if (status === "trial") {
+      const dl = typeof s?.daysLeft === "number" ? s.daysLeft : undefined
+      label = dl != null ? `TRIAL - ${dl} días` : "TRIAL - Activo"
+    } else if (status === "none") label = "Sin suscripción"
+    else if (status === "beta") label = "BETA - Acceso gratuito"
+
+    // Colores (suaves) según estado
+    const classes =
+      status === "active"
+        ? "from-[#00f0ff]/20 to-[#00f0ff]/10"
+        : status === "trial"
+        ? "from-[#ff00aa]/20 to-[#8b5cf6]/15"
+        : status === "none"
+        ? "from-white/10 to-white/5"
+        : "from-[#00f0ff]/20 to-[#ff00aa]/20"
+
+    return { label, classes }
+  }, [user])
 
   // ---------- Instrucciones estrictas (NOTICIERO) ----------
   const baseInstructions = useMemo(() => {
@@ -234,7 +337,6 @@ export default function Dashboard() {
         connectingRef.current = false
         configuredSessionRef.current = false
 
-        // 3) Config sesión (server_vad + transcribe)
         sendEvent({
           type: "session.update",
           session: {
@@ -246,22 +348,18 @@ export default function Dashboard() {
         })
         configuredSessionRef.current = true
 
-        // 4) Inyectar titulares precargados (HOY)
         const formatted = formattedHeadlines()
         if (!formatted) {
           injectSystemText(
             `NO HAY TITULARES CARGADOS EN DB PARA HOY.\n` +
               `Regla: decí "todavía no tengo titulares cargados para hoy" y ofrecé refrescar.`
           )
-          requestResponse(
-            `Decí: "Todavía no tengo titulares cargados para hoy. ¿Querés que intente actualizar ahora?" y esperá.`
-          )
+          requestResponse(`Decí: "Todavía no tengo titulares cargados para hoy. ¿Querés que intente actualizar ahora?" y esperá.`)
           return
         }
 
         injectSystemText(`TITULARES HOY (Argentina). Usá SOLO esto:\n${formatted}`)
 
-        // 5) Primera salida: titulares
         requestResponse(
           activeMode === "podcast"
             ? `Arrancá el programa. Leé 7 titulares y terminá con: "¿Cuál querés que amplíe?"`
@@ -273,12 +371,10 @@ export default function Dashboard() {
         try {
           const evt = JSON.parse(msg.data)
 
-          // UX: cuando termina una respuesta, bajamos “hablando”
           if (evt?.type?.includes("response.completed") || evt?.type?.includes("response.done")) {
             setIsSpeaking(false)
           }
 
-          // Transcripción (según evento que te llegue)
           const transcript =
             (evt?.transcript && typeof evt.transcript === "string" && evt.transcript.trim()) ? evt.transcript.trim() : ""
 
@@ -288,17 +384,14 @@ export default function Dashboard() {
 
           if (!transcript) return
 
-          // Comandos “controlados”
           const wantsRefresh =
             /actualiz(a|á)|refresc(a|á)|recarg(a|á)|descarg(a|á)\s+de\s+nuevo|nuevas\s+noticias/i.test(transcript)
 
           if (wantsRefresh) {
-            // 1) disparo ingest (si tu route es POST, ajustá a POST)
             try {
               await fetch("/api/news/ingest", { method: "POST" })
             } catch {}
 
-            // 2) vuelvo a pedir titulares HOY
             try {
               const r = await fetch("/api/news?limit=10", { cache: "no-store" })
               const d = await r.json()
@@ -312,7 +405,6 @@ export default function Dashboard() {
             return
           }
 
-          // Selección de noticia: “la 3”, “el 2”, “id 123”
           const numMatch = transcript.match(/\b(?:la|el)\s+(\d{1,2})\b/i)
           const idMatch = transcript.match(/\bid\s*[:#]?\s*(\d+)\b/i)
 
@@ -328,7 +420,6 @@ export default function Dashboard() {
 
           if (!pickedId) return
 
-          // Traer artículo completo (desde DB) e inyectar
           const aRes = await fetch(`/api/news/article?id=${pickedId}`, { cache: "no-store" })
           const aData = await aRes.json()
 
@@ -351,7 +442,6 @@ export default function Dashboard() {
         }
       }
 
-      // 4) SDP handshake
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)
 
@@ -387,11 +477,6 @@ export default function Dashboard() {
     dcRef.current = null
     pcRef.current = null
     remoteAudioElRef.current = null
-
-    // NO paramos el mic stream para reusar permiso y bajar latencia en próxima conexión,
-    // pero si querés ahorro extremo, descomentá:
-    // try { micStreamRef.current?.getTracks().forEach(t => t.stop()) } catch {}
-    // micStreamRef.current = null
 
     setIsListening(false)
     setIsSpeaking(false)
@@ -468,18 +553,56 @@ export default function Dashboard() {
               <div className="p-4 border-b border-white/10">
                 <p className="font-medium">{user.name}</p>
                 <p className="text-sm text-white/40">{user.email}</p>
-                <div className="mt-2 px-2 py-1 bg-gradient-to-r from-[#00f0ff]/20 to-[#ff00aa]/20 rounded-full inline-block">
-                  <span className="text-xs font-medium">BETA - Acceso gratuito</span>
+
+                {/* ✅ Badge real de suscripción + acceso a pricing */}
+                <div className={`mt-2 px-2 py-1 bg-gradient-to-r ${subscriptionBadge.classes} rounded-full inline-flex items-center gap-2`}>
+                  <span className="text-xs font-medium">{subscriptionBadge.label}</span>
+                  <button
+                    onClick={() => {
+                      setMenuOpen(false)
+                      router.push("/pricing")
+                    }}
+                    className="text-xs text-[#00f0ff] hover:text-[#ff00aa] transition-colors"
+                  >
+                    Ver plan
+                  </button>
                 </div>
               </div>
+
               <div className="p-2">
-                <a href="/profile" className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-white/70 hover:bg-white/5 hover:text-white transition-all">
+                {/* ✅ Mantengo todo lo tuyo y sumo "Mi suscripción" como item */}
+                <button
+                  onClick={() => {
+                    setMenuOpen(false)
+                    router.push("/pricing")
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-white/70 hover:bg-white/5 hover:text-white transition-all"
+                >
+                  <span>Mi suscripción</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setMenuOpen(false)
+                    router.push("/profile")
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-white/70 hover:bg-white/5 hover:text-white transition-all"
+                >
                   <span>Mi Perfil</span>
-                </a>
-                <a href="/settings" className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-white/70 hover:bg-white/5 hover:text-white transition-all">
+                </button>
+
+                <button
+                  onClick={() => {
+                    setMenuOpen(false)
+                    router.push("/settings")
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-white/70 hover:bg-white/5 hover:text-white transition-all"
+                >
                   <span>Ajustes</span>
-                </a>
+                </button>
+
                 <div className="my-2 border-t border-white/10" />
+
                 <button
                   onClick={handleLogout}
                   className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-[#ff00aa] hover:bg-[#ff00aa]/10 transition-all"
@@ -494,7 +617,7 @@ export default function Dashboard() {
 
       {/* Main */}
       <main className="relative z-10 flex flex-col items-center justify-center min-h-[calc(100vh-200px)] px-6">
-        {/* Mode Selector (solo 2) */}
+        {/* Mode Selector */}
         <div className="flex gap-2 mb-12">
           {[
             { id: "conversacion" as const, label: "Conversación" },
@@ -615,9 +738,7 @@ export default function Dashboard() {
           {isProcessing && (
             <div className="animate-fade-in">
               <p className="text-2xl font-light text-[#ff00aa]">Conectando…</p>
-              <p className="text-sm text-white/30 mt-2">
-                Cargando VOYCE (titulares ya están listos desde la app)
-              </p>
+              <p className="text-sm text-white/30 mt-2">Cargando VOYCE (titulares ya están listos desde la app)</p>
             </div>
           )}
 
@@ -631,9 +752,7 @@ export default function Dashboard() {
             <div className="animate-fade-in">
               <p className="text-2xl font-light text-white/40 mb-2">Tocá para hablar</p>
               <p className="text-sm text-white/30">
-                {activeMode === "conversacion"
-                  ? "Titulares de hoy + ampliación por elección"
-                  : "Modo programa: lectura corrida y luego elegís"}
+                {activeMode === "conversacion" ? "Titulares de hoy + ampliación por elección" : "Modo programa: lectura corrida y luego elegís"}
               </p>
             </div>
           )}
@@ -642,11 +761,7 @@ export default function Dashboard() {
 
       {/* Footer */}
       <footer className="fixed bottom-0 left-0 right-0 p-4 text-center">
-        <p className="text-xs text-white/30">
-          {headlinesReadyRef.current
-            ? "Titulares de hoy precargados"
-            : "Cargando titulares…"}
-        </p>
+        <p className="text-xs text-white/30">{headlinesReadyRef.current ? "Titulares de hoy precargados" : "Cargando titulares…"}</p>
       </footer>
 
       <style jsx global>{`
