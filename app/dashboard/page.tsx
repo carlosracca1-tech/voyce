@@ -137,8 +137,6 @@ useEffect(() => {
       }
 })()
 
-
-
     // ✅ leer modo preferido desde ajustes (mismo naming que Settings)
     const rawSettings = localStorage.getItem("voyce_settings")
     if (rawSettings) {
