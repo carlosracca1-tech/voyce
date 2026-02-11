@@ -111,11 +111,11 @@ async function parseRSS(feedUrl: string): Promise<Array<{ title: string; link: s
 function isAuthorizedCron(request: Request) {
   const cronSecret = process.env.CRON_SECRET
 
-  // Vercel Cron
+  // ✅ Vercel Cron
   const vercelCron = request.headers.get("x-vercel-cron")
   if (vercelCron) return true
 
-  // Manual (curl / tools)
+  // ✅ Manual (curl / tools)
   if (cronSecret) {
     const auth = request.headers.get("authorization")
     if (auth === `Bearer ${cronSecret}`) return true
@@ -185,7 +185,7 @@ async function cronLogFinish(id: number | undefined, ok: boolean, details?: stri
   `
 }
 
-// ---------- INGEST core (reutilizable por POST y por CRON/GET) ----------
+// ---------- INGEST core ----------
 async function doIngest() {
   const articles: NewsArticle[] = []
 
@@ -316,12 +316,11 @@ async function enrichPendingArticles(limit = 10) {
   return { processed: pending.length, ok, blocked, error }
 }
 
-// ---------------------- POST = INGEST manual (protegido por CRON_SECRET) ----------------------
+// ---------------------- POST = ingest manual (Bearer CRON_SECRET) ----------------------
 export async function POST(request: Request) {
   const cronSecret = process.env.CRON_SECRET
   const authHeader = request.headers.get("authorization")
 
-  // si tenés CRON_SECRET seteado, protege el POST
   if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 })
   }
@@ -338,14 +337,14 @@ export async function POST(request: Request) {
   }
 }
 
-// ---------------------- GET = (1) CRON ingest automático, (2) enrich, (3) status ----------------------
+// ---------------------- GET = cron ingest + enrich on-demand + status ----------------------
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const mode = searchParams.get("mode")
 
-  // ✅ 1) Si viene de Vercel Cron, correr ingest (porque cron pega con GET)
-  const vercelCron = request.headers.get("x-vercel-cron")
-  if (vercelCron) {
+  // ✅ Ingest por GET: lo corre Vercel Cron (x-vercel-cron) o manual (Bearer CRON_SECRET)
+  // Solo cuando NO hay mode
+  if (!mode && isAuthorizedCron(request)) {
     const runId = await cronLogStart("news_ingest:cron")
 
     try {
@@ -358,7 +357,8 @@ export async function GET(request: Request) {
     }
   }
 
-  // ✅ 2) Enrich pending (protegido por isAuthorizedCron)
+  // ✅ Enrich on-demand: requiere autorización (x-vercel-cron o Bearer CRON_SECRET)
+  // (Si después querés que esto sea por login de usuario, lo ajustamos)
   if (mode === "enrich") {
     if (!isAuthorizedCron(request)) {
       return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 })
@@ -367,7 +367,7 @@ export async function GET(request: Request) {
     const limit = Number(searchParams.get("limit") || "10")
     const safeLimit = Math.min(Math.max(limit, 1), 30)
 
-    const runId = await cronLogStart("news_enrich:cron")
+    const runId = await cronLogStart("news_enrich:on_demand")
 
     try {
       const result = await enrichPendingArticles(safeLimit)
@@ -384,11 +384,12 @@ export async function GET(request: Request) {
     }
   }
 
-  // ✅ 3) Status
+  // ✅ Status
   return NextResponse.json({
     ok: true,
     mode: "status",
-    message: "Use POST /api/news/ingest to ingest (manual) and GET /api/news/ingest?mode=enrich to enrich pending articles. Vercel Cron triggers ingest via GET + x-vercel-cron header.",
+    message:
+      "Vercel Cron triggers ingest via GET + x-vercel-cron header. Manual ingest: POST (Bearer) or GET (Bearer). Enrich: GET ?mode=enrich (Bearer).",
     timestamp: new Date().toISOString(),
   })
 }
