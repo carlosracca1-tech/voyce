@@ -108,6 +108,146 @@ async function parseRSS(feedUrl: string): Promise<Array<{ title: string; link: s
   }
 }
 
+function isAuthorizedCron(request: Request) {
+  const cronSecret = process.env.CRON_SECRET
+
+  // Vercel Cron
+  const vercelCron = request.headers.get("x-vercel-cron")
+  if (vercelCron) return true
+
+  // Manual (curl / tools)
+  if (cronSecret) {
+    const auth = request.headers.get("authorization")
+    if (auth === `Bearer ${cronSecret}`) return true
+  }
+
+  return false
+}
+
+function calculateImportance(title: string, category: string, source: string) {
+  const t = (title || "").toLowerCase()
+  let score = 0
+
+  // Economía / macro
+  if (/(dólar|dolar|inflación|inflacion|fmi|tasas|deuda|reservas|cepo|banco central|bcra|pbi|riesgo país|riesgo pais)/.test(t)) score += 60
+
+  // Política / medidas
+  if (/(gobierno|congreso|ley|decreto|regulación|regulacion|elecciones|presidente|ministerio|gabinete|justicia|corte)/.test(t)) score += 45
+
+  // Energía / minería / infraestructura
+  if (/(vaca muerta|ypf|petróleo|petroleo|gas|energía|energia|litio|miner(a|ía)|oleoducto|gasoducto)/.test(t)) score += 40
+
+  // Mercados / empresas
+  if (/(bonos|acciones|merval|wall street|mercados|dólar blue|dolar blue|brecha|licitación|licitacion|subasta)/.test(t)) score += 35
+
+  // Penalizaciones: deportes / farándula / color
+  if (/(pumas|rugby|fútbol|futbol|boca|river|messi|tenis|selección|seleccion|mundial|gran premio|nba)/.test(t)) score -= 80
+  if (/(show|farándula|farandula|famosos|celebridad|streamer|reality|espectáculos|espectaculos)/.test(t)) score -= 70
+
+  // Categoría RSS
+  if (category === "economia") score += 15
+
+  // Fuentes económicas un poquito arriba
+  if (/cronista|ámbito|ambito/i.test(source)) score += 5
+
+  return score
+}
+
+// ---------- CRON LOGGING (tabla cron_runs) ----------
+async function cronLogStart(job: string) {
+  if (!process.env.DATABASE_URL) return undefined
+
+  const { neon } = await import("@neondatabase/serverless")
+  const sql = neon(process.env.DATABASE_URL)
+
+  const rows = await sql`
+    insert into cron_runs (job, meta)
+    values (${job}, '{}'::jsonb)
+    returning id
+  `
+
+  return rows[0]?.id as number | undefined
+}
+
+async function cronLogFinish(id: number | undefined, ok: boolean, details?: string, meta?: any) {
+  if (!id || !process.env.DATABASE_URL) return
+
+  const { neon } = await import("@neondatabase/serverless")
+  const sql = neon(process.env.DATABASE_URL)
+
+  await sql`
+    update cron_runs
+    set finished_at = now(),
+        ok = ${ok},
+        details = ${details ?? null},
+        meta = ${meta ? JSON.stringify(meta) : null}::jsonb
+    where id = ${id}
+  `
+}
+
+// ---------- INGEST core (reutilizable por POST y por CRON/GET) ----------
+async function doIngest() {
+  const articles: NewsArticle[] = []
+
+  for (const feed of RSS_FEEDS) {
+    const items = await parseRSS(feed.url)
+
+    for (const item of items) {
+      articles.push({
+        source: feed.name,
+        sourceUrl: feed.url,
+        title: item.title,
+        summary: item.summary,
+        content: item.summary,
+        link: item.link,
+        category: feed.category,
+        publishedAt: item.publishedAt,
+      })
+    }
+  }
+
+  if (!process.env.DATABASE_URL) {
+    return { ok: true, mode: "ingest", articlesProcessed: articles.length, inserted: 0, sources: RSS_FEEDS.length }
+  }
+
+  const { neon } = await import("@neondatabase/serverless")
+  const sql = neon(process.env.DATABASE_URL)
+
+  let inserted = 0
+
+  for (const article of articles) {
+    const importance = calculateImportance(article.title, article.category, article.source)
+
+    const r = await sql`
+      INSERT INTO news_articles (
+        source, source_url, title, summary, content, link, category, published_at,
+        content_status, importance_score
+      )
+      VALUES (
+        ${article.source}, ${article.sourceUrl}, ${article.title}, ${article.summary},
+        ${article.content}, ${article.link}, ${article.category},
+        ${article.publishedAt?.toISOString() || null},
+        'pending',
+        ${importance}
+      )
+      ON CONFLICT (link) DO NOTHING
+      RETURNING id
+    `.catch(() => [])
+
+    if (Array.isArray(r) && r.length > 0) inserted++
+  }
+
+  await sql`DELETE FROM news_articles WHERE fetched_at < NOW() - INTERVAL '7 days'`
+
+  return {
+    ok: true,
+    mode: "ingest",
+    articlesProcessed: articles.length,
+    inserted,
+    sources: RSS_FEEDS.length,
+  }
+}
+
 async function enrichPendingArticles(limit = 10) {
   if (!process.env.DATABASE_URL) {
     return { processed: 0, ok: 0, blocked: 0, error: 0 }
@@ -176,153 +316,79 @@ async function enrichPendingArticles(limit = 10) {
   return { processed: pending.length, ok, blocked, error }
 }
 
-function isAuthorizedCron(request: Request) {
-  const cronSecret = process.env.CRON_SECRET
-
-  // Vercel Cron
-  const vercelCron = request.headers.get("x-vercel-cron")
-  if (vercelCron) return true
-
-  // Manual
-  if (cronSecret) {
-    const auth = request.headers.get("authorization")
-    if (auth === `Bearer ${cronSecret}`) return true
-  }
-
-  return false
-}
-
-function calculateImportance(title: string, category: string, source: string) {
-  const t = (title || "").toLowerCase()
-  let score = 0
-
-  // Economía / macro
-  if (/(dólar|dolar|inflación|inflacion|fmi|tasas|deuda|reservas|cepo|banco central|bcra|pbi|riesgo país|riesgo pais)/.test(t)) score += 60
-
-  // Política / medidas
-  if (/(gobierno|congreso|ley|decreto|regulación|regulacion|elecciones|presidente|ministerio|gabinete|justicia|corte)/.test(t)) score += 45
-
-  // Energía / minería / infraestructura
-  if (/(vaca muerta|ypf|petróleo|petroleo|gas|energía|energia|litio|miner(a|ía)|oleoducto|gasoducto)/.test(t)) score += 40
-
-  // Mercados / empresas
-  if (/(bonos|acciones|merval|wall street|mercados|dólar blue|dolar blue|brecha|licitación|licitacion|subasta)/.test(t)) score += 35
-
-  // Penalizaciones: deportes / farándula / color
-  if (/(pumas|rugby|fútbol|futbol|boca|river|messi|tenis|selección|seleccion|mundial|gran premio|nba)/.test(t)) score -= 80
-  if (/(show|farándula|farandula|famosos|celebridad|streamer|reality|espectáculos|espectaculos)/.test(t)) score -= 70
-
-  // Categoría RSS
-  if (category === "economia") score += 15
-
-  // Fuentes económicas un poquito arriba
-  if (/cronista|ámbito|ambito/i.test(source)) score += 5
-
-  return score
-}
-
-// POST = ingest RSS
+// ---------------------- POST = INGEST manual (protegido por CRON_SECRET) ----------------------
 export async function POST(request: Request) {
-  const authHeader = request.headers.get("authorization")
   const cronSecret = process.env.CRON_SECRET
+  const authHeader = request.headers.get("authorization")
 
+  // si tenés CRON_SECRET seteado, protege el POST
   if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 })
   }
 
-  const articles: NewsArticle[] = []
+  const runId = await cronLogStart("news_ingest:post")
 
-  for (const feed of RSS_FEEDS) {
-    const items = await parseRSS(feed.url)
-
-    for (const item of items) {
-      articles.push({
-        source: feed.name,
-        sourceUrl: feed.url,
-        title: item.title,
-        summary: item.summary,
-        content: item.summary,
-        link: item.link,
-        category: feed.category,
-        publishedAt: item.publishedAt,
-      })
-    }
+  try {
+    const result = await doIngest()
+    await cronLogFinish(runId, true, "ok", result)
+    return NextResponse.json({ ...result, timestamp: new Date().toISOString() })
+  } catch (e: any) {
+    await cronLogFinish(runId, false, e?.message ?? "error")
+    return NextResponse.json({ ok: false, error: e?.message ?? "error" }, { status: 500 })
   }
-
-  if (process.env.DATABASE_URL && articles.length > 0) {
-    try {
-      const { neon } = await import("@neondatabase/serverless")
-      const sql = neon(process.env.DATABASE_URL)
-
-      for (const article of articles) {
-        const importance = calculateImportance(article.title, article.category, article.source)
-
-        await sql`
-          INSERT INTO news_articles (
-            source, source_url, title, summary, content, link, category, published_at,
-            content_status, importance_score
-          )
-          VALUES (
-            ${article.source}, ${article.sourceUrl}, ${article.title}, ${article.summary},
-            ${article.content}, ${article.link}, ${article.category},
-            ${article.publishedAt?.toISOString() || null},
-            'pending',
-            ${importance}
-          )
-          ON CONFLICT DO NOTHING
-        `.catch(() => {})
-      }
-
-      await sql`DELETE FROM news_articles WHERE fetched_at < NOW() - INTERVAL '7 days'`
-
-      return NextResponse.json({
-        ok: true,
-        mode: "ingest",
-        articlesProcessed: articles.length,
-        sources: RSS_FEEDS.length,
-        timestamp: new Date().toISOString(),
-      })
-    } catch (error) {
-      console.error("Error saving to database:", error)
-    }
-  }
-
-  return NextResponse.json({
-    ok: true,
-    mode: "ingest",
-    articlesProcessed: articles.length,
-    sources: RSS_FEEDS.length,
-    articles: articles.slice(0, 20),
-    timestamp: new Date().toISOString(),
-  })
 }
 
-// GET = enrich (mode=enrich)
+// ---------------------- GET = (1) CRON ingest automático, (2) enrich, (3) status ----------------------
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const mode = searchParams.get("mode")
 
+  // ✅ 1) Si viene de Vercel Cron, correr ingest (porque cron pega con GET)
+  const vercelCron = request.headers.get("x-vercel-cron")
+  if (vercelCron) {
+    const runId = await cronLogStart("news_ingest:cron")
+
+    try {
+      const result = await doIngest()
+      await cronLogFinish(runId, true, "ok", result)
+      return NextResponse.json({ ...result, timestamp: new Date().toISOString() })
+    } catch (e: any) {
+      await cronLogFinish(runId, false, e?.message ?? "error")
+      return NextResponse.json({ ok: false, error: e?.message ?? "error" }, { status: 500 })
+    }
+  }
+
+  // ✅ 2) Enrich pending (protegido por isAuthorizedCron)
   if (mode === "enrich") {
     if (!isAuthorizedCron(request)) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 })
     }
 
     const limit = Number(searchParams.get("limit") || "10")
     const safeLimit = Math.min(Math.max(limit, 1), 30)
 
-    const result = await enrichPendingArticles(safeLimit)
-    return NextResponse.json({
-      mode: "enrich",
-      ...result,
-      timestamp: new Date().toISOString(),
-    })
+    const runId = await cronLogStart("news_enrich:cron")
+
+    try {
+      const result = await enrichPendingArticles(safeLimit)
+      await cronLogFinish(runId, true, "ok", result)
+      return NextResponse.json({
+        ok: true,
+        mode: "enrich",
+        ...result,
+        timestamp: new Date().toISOString(),
+      })
+    } catch (e: any) {
+      await cronLogFinish(runId, false, e?.message ?? "error")
+      return NextResponse.json({ ok: false, error: e?.message ?? "error" }, { status: 500 })
+    }
   }
 
-  // (opcional) status rápido
+  // ✅ 3) Status
   return NextResponse.json({
     ok: true,
     mode: "status",
-    message: "Use POST /api/news/ingest to ingest and GET /api/news/ingest?mode=enrich to enrich pending articles.",
+    message: "Use POST /api/news/ingest to ingest (manual) and GET /api/news/ingest?mode=enrich to enrich pending articles. Vercel Cron triggers ingest via GET + x-vercel-cron header.",
     timestamp: new Date().toISOString(),
   })
 }
