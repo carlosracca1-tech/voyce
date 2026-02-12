@@ -12,6 +12,36 @@ interface UserData {
 }
 
 type Mode = "conversacion" | "podcast"
+type VoicePreset = "radio_pro" | "radio_canchero" | "podcast_story"
+
+function clamp(n: number, min: number, max: number) {
+  return Math.min(Math.max(n, min), max)
+}
+
+function normalizeMode(x: any): Mode {
+  const v = String(x ?? "").toLowerCase()
+  return v === "podcast" ? "podcast" : "conversacion"
+}
+
+function normalizePreset(x: any): VoicePreset {
+  const v = String(x ?? "").toLowerCase()
+  if (v === "radio_canchero") return "radio_canchero"
+  if (v === "podcast_story") return "podcast_story"
+  return "radio_pro"
+}
+
+function normalizeSpeed(x: any): number {
+  const n = Number(x)
+  if (!Number.isFinite(n)) return 1.15
+  return clamp(n, 0.25, 1.5)
+}
+
+// ✅ Mapeo preset -> voz realtime
+function presetToVoice(preset: VoicePreset) {
+  if (preset === "radio_canchero") return "verse"
+  if (preset === "podcast_story") return "shimmer"
+  return "marin" // radio_pro
+}
 
 export default function Dashboard() {
   const router = useRouter()
@@ -19,7 +49,6 @@ export default function Dashboard() {
   const [user, setUser] = useState<UserData | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
 
-  // 👇 PEGALO ACÁ
   const handleLogout = () => {
     setMenuOpen(false)
     localStorage.removeItem("voyce_user")
@@ -27,13 +56,21 @@ export default function Dashboard() {
     router.push("/")
   }
 
-  // UI/estado de VOYCE
+  // ✅ Settings (desde DB)
   const [activeMode, setActiveMode] = useState<Mode>("conversacion")
-  const [isListening, setIsListening] = useState(false) // live (webrtc abierto)
-  const [isProcessing, setIsProcessing] = useState(false) // conectando
-  const [isSpeaking, setIsSpeaking] = useState(false) // “aprox”: mientras pedimos response
-  const [currentText, setCurrentText] = useState("") // transcripción
+  const [voicePreset, setVoicePreset] = useState<VoicePreset>("radio_pro")
+  const [voiceSpeed, setVoiceSpeed] = useState<number>(1.15)
+  const [autoListen, setAutoListen] = useState<boolean>(true)
+
+  // UI/estado VOYCE
+  const [isListening, setIsListening] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [isSpeaking, setIsSpeaking] = useState(false)
+  const [currentText, setCurrentText] = useState("")
   const [audioLevel, setAudioLevel] = useState(0)
+
+  // ✅ transcripción desplegable
+  const [showTranscript, setShowTranscript] = useState(false)
 
   const menuRef = useRef<HTMLDivElement | null>(null)
 
@@ -43,15 +80,14 @@ export default function Dashboard() {
   const remoteAudioElRef = useRef<HTMLAudioElement | null>(null)
   const micStreamRef = useRef<MediaStream | null>(null)
 
-  // Cache de noticias (HOY) precargadas al abrir la app
+  // Cache titulares
   const headlinesCacheRef = useRef<any[]>([])
   const headlinesReadyRef = useRef(false)
 
   // Guards
   const connectingRef = useRef(false)
-  const configuredSessionRef = useRef(false)
 
-  // ---------- Helpers “safe” ----------
+  // ---------- Helpers realtime ----------
   const sendEvent = (evt: any) => {
     const dc = dcRef.current
     if (!dc || dc.readyState !== "open") return
@@ -87,9 +123,14 @@ export default function Dashboard() {
   }
 
   const formattedHeadlines = () => {
-    const list = (headlinesCacheRef.current || []).slice(0, 10)
+    const list = (headlinesCacheRef.current || []).slice(0, 30)
     if (!list.length) return ""
-    return list.map((h: any, i: number) => `${i + 1}) [id:${h.id}] ${h.title} — ${h.source}`).join("\n")
+    return list
+      .map((h: any, i: number) => {
+        const score = typeof h.importance_score === "number" ? h.importance_score : null
+        return `${i + 1}) [id:${h.id}] ${h.title} — ${h.source}${score != null ? ` (score:${score})` : ""}`
+      })
+      .join("\n")
   }
 
   // ---------- Cerrar menú clic afuera ----------
@@ -106,107 +147,56 @@ export default function Dashboard() {
     return () => document.removeEventListener("click", handleClickOutside)
   }, [menuOpen])
 
-  // ---------- Auth local + modo preferido ----------
-useEffect(() => {
-  const stored = localStorage.getItem("voyce_user")
-  if (!stored) {
-    router.push("/")
-    return
-  }
-
-  try {
-    const userData = JSON.parse(stored)
-    setUser(userData)
-
-    // ✅ cargar settings desde DB y setear defaults del dashboard
-    ;(async () => {
-      try {
-        const res = await fetch(
-          `/api/user/settings?userId=${userData.id}`,
-          { cache: "no-store" }
-        )
-
-        const data = await res.json()
-
-        if (data?.ok && data?.settings) {
-          const preferred = data.settings.preferred_mode
-          setActiveMode(preferred === "podcast" ? "podcast" : "conversacion")
-        }
-      } catch (err) {
-        // si falla, queda conversacion por default
-      }
-    })()
-
-    // ✅ leer modo preferido desde ajustes (mismo naming que Settings)
-    const rawSettings = localStorage.getItem("voyce_settings")
-    if (rawSettings) {
-      try {
-        const s = JSON.parse(rawSettings)
-
-        // migración por si quedó algo viejo ("chat"/"news")
-        const preferred =
-          s?.preferredMode === "podcast"
-            ? "podcast"
-            : s?.preferredMode === "conversacion"
-              ? "conversacion"
-              : s?.preferredMode === "chat"
-                ? "conversacion"
-                : s?.preferredMode === "news"
-                  ? "conversacion"
-                  : null
-
-        if (preferred === "podcast" || preferred === "conversacion") {
-          setActiveMode(preferred)
-        }
-      } catch {
-        // ignore
-      }
+  // ---------- Auth + load settings ----------
+  useEffect(() => {
+    const stored = localStorage.getItem("voyce_user")
+    if (!stored) {
+      router.push("/")
+      return
     }
-  } catch {
-    router.push("/")
-  }
-}, [router])
 
-useEffect(() => {
-  if (!user?.token) return
-
-  ;(async () => {
     try {
-      const res = await fetch("/api/user/settings", {
-        method: "GET",
-        headers: { Authorization: `Bearer ${user.token}` },
-        cache: "no-store",
-      })
-      const data = await res.json()
-      if (!data?.ok || !data?.settings) return
+      const userData = JSON.parse(stored)
+      setUser(userData)
 
-      const pm = (data.settings.preferred_mode ?? data.settings.preferredMode ?? "conversacion").toString().toLowerCase()
-      setActiveMode(pm === "podcast" ? "podcast" : "conversacion")
-
-      // opcional: guardar local para fallback/offline
-      localStorage.setItem("voyce_settings", JSON.stringify({
-        voiceSpeed: Number(data.settings.voice_speed ?? 1),
-        preferredMode: pm === "podcast" ? "podcast" : "conversacion",
-        autoListen: Boolean(data.settings.auto_listen ?? true),
-        darkMode: Boolean(data.settings.dark_mode ?? true),
-      }))
+      ;(async () => {
+        try {
+          const res = await fetch(`/api/user/settings?userId=${userData.id}`, { cache: "no-store" })
+          const data = await res.json()
+          if (data?.ok && data?.settings) {
+            setActiveMode(normalizeMode(data.settings.preferred_mode))
+            setVoiceSpeed(normalizeSpeed(data.settings.voice_speed))
+            setVoicePreset(normalizePreset(data.settings.voice_preset))
+            setAutoListen(Boolean(data.settings.auto_listen ?? true))
+          }
+        } catch {
+          // fallback local
+          const raw = localStorage.getItem("voyce_settings")
+          if (raw) {
+            try {
+              const s = JSON.parse(raw)
+              setActiveMode(normalizeMode(s.preferredMode))
+              setVoiceSpeed(normalizeSpeed(s.voiceSpeed))
+              setVoicePreset(normalizePreset(s.voicePreset))
+              setAutoListen(Boolean(s.autoListen ?? true))
+            } catch {}
+          }
+        }
+      })()
     } catch {
-      // ignore
+      router.push("/")
     }
-  })()
-}, [user?.token])
+  }, [router])
 
-
-  // ---------- Precarga de titulares HOY ----------
+  // ---------- Precarga titulares HOY ----------
   useEffect(() => {
     let cancelled = false
 
     ;(async () => {
       try {
-        const r = await fetch("/api/news?limit=10", { cache: "no-store" })
+        const r = await fetch("/api/news?limit=30", { cache: "no-store" })
         const d = await r.json()
         if (cancelled) return
-
         headlinesCacheRef.current = d?.news || []
         headlinesReadyRef.current = true
       } catch {
@@ -231,7 +221,7 @@ useEffect(() => {
     }
   }, [isListening, isSpeaking])
 
-  // ---------- Suscripción (badge como antes) ----------
+  // ---------- Badge suscripción ----------
   const subscriptionBadge = useMemo(() => {
     const s = user?.subscription
     const status = (s?.status || "beta").toLowerCase()
@@ -242,22 +232,20 @@ useEffect(() => {
       const dl = typeof s?.daysLeft === "number" ? s.daysLeft : undefined
       label = dl != null ? `TRIAL - ${dl} días` : "TRIAL - Activo"
     } else if (status === "none") label = "Sin suscripción"
-    else if (status === "beta") label = "BETA - Acceso gratuito"
 
-    // Colores (suaves) según estado
     const classes =
       status === "active"
         ? "from-[#00f0ff]/20 to-[#00f0ff]/10"
         : status === "trial"
-        ? "from-[#ff00aa]/20 to-[#8b5cf6]/15"
-        : status === "none"
-        ? "from-white/10 to-white/5"
-        : "from-[#00f0ff]/20 to-[#ff00aa]/20"
+          ? "from-[#ff00aa]/20 to-[#8b5cf6]/15"
+          : status === "none"
+            ? "from-white/10 to-white/5"
+            : "from-[#00f0ff]/20 to-[#ff00aa]/20"
 
     return { label, classes }
   }, [user])
 
-  // ---------- Instrucciones estrictas (NOTICIERO) ----------
+  // ---------- Instrucciones estrictas (AL GRANO) ----------
   const baseInstructions = useMemo(() => {
     const todayAR = new Intl.DateTimeFormat("es-AR", {
       timeZone: "America/Argentina/Buenos_Aires",
@@ -269,12 +257,15 @@ useEffect(() => {
 
     return (
       `Sos VOYCE, locutor argentino. Fecha (Argentina): ${todayAR}.\n` +
-      `Tu objetivo principal es contar y ampliar SOLO las noticias de HOY que te pasamos desde la base de datos.\n` +
+      `Usás SOLO titulares de HOY que vienen de la DB (lista inyectada). NO inventes.\n` +
       `Reglas duras:\n` +
-      `- NO inventes noticias, NO uses conocimiento externo.\n` +
-      `- Si el usuario pregunta algo que no está en los titulares/artículo inyectado, respondé breve y volvé a: "¿Qué titular querés que amplíe?"\n` +
-      `- Podés ser cálido y conversacional, pero SIEMPRE volvé al noticiero.\n` +
-      `- Primero leés titulares (de la lista), luego preguntás cuál ampliar.\n`
+      `- No hagas charla social ni saludos largos. Arrancá directo.\n` +
+      `- Si piden algo fuera de la lista/artículo: decí "No lo tengo en los titulares de hoy" y volvé a la elección.\n` +
+      `Flujo obligatorio:\n` +
+      `1) Preguntá: "¿De qué diarios querés los principales titulares hoy? La Nación, Clarín, Ámbito, Cronista, Infobae, Página 12."\n` +
+      `   - Si no elige diario y pide "principales": listá los 5 más importantes y decí el diario en cada uno.\n` +
+      `2) Según el diario elegido: listá los principales titulares ordenados por importancia.\n` +
+      `3) Pedí que elija por número o por id.\n`
     )
   }, [])
 
@@ -282,18 +273,17 @@ useEffect(() => {
     if (mode === "podcast") {
       return (
         baseInstructions +
-        `Modo PODCAST: tono más continuo, estilo programa de radio. ` +
-        `Leé 7 titulares en forma de monólogo breve (60-90s) y después preguntá: "¿Cuál querés que amplíe?"`
+        `Modo PODCAST: lectura corrida estilo radio. Sin saludos. Mantener hilo.\n` +
+        `Primero diarios, luego titulares como monólogo breve, y al final pedí cuál ampliar.\n`
       )
     }
     return (
       baseInstructions +
-      `Modo CONVERSACIÓN: más ida y vuelta. ` +
-      `Leé 5 titulares, preguntá cuál ampliar y esperá.`
+      `Modo CONVERSACIÓN: ida y vuelta. Sin saludos. Preguntá diarios y esperá.\n`
     )
   }
 
-  // ---------- Conectar Realtime (solo cuando tocan la orbe) ----------
+  // ---------- Conectar Realtime ----------
   const connectRealtime = async () => {
     if (connectingRef.current) return
     if (isListening && dcRef.current?.readyState === "open") return
@@ -301,15 +291,21 @@ useEffect(() => {
     connectingRef.current = true
     setIsProcessing(true)
     setCurrentText("")
+    setIsSpeaking(false)
 
     try {
-      // 1) Token efímero
-      const tokenResp = await fetch("/api/realtime/token", { cache: "no-store" })
+      const voice = presetToVoice(voicePreset)
+      const speed = normalizeSpeed(voiceSpeed)
+
+      // ✅ Token efímero con voice+speed (clave)
+      const tokenResp = await fetch(`/api/realtime/token?voice=${encodeURIComponent(voice)}&speed=${encodeURIComponent(String(speed))}`, {
+        cache: "no-store",
+      })
       const tokenData = await tokenResp.json()
       const EPHEMERAL_KEY = tokenData?.value
       if (!EPHEMERAL_KEY) throw new Error("No ephemeral key returned from /api/realtime/token")
 
-      // 2) WebRTC
+      // WebRTC
       const pc = new RTCPeerConnection()
       pcRef.current = pc
 
@@ -321,7 +317,7 @@ useEffect(() => {
         audioEl.srcObject = e.streams[0]
       }
 
-      // mic local (solo ahora)
+      // mic
       const ms = await ensureMic()
       ms.getTracks().forEach((t) => pc.addTrack(t))
 
@@ -333,8 +329,8 @@ useEffect(() => {
         setIsListening(true)
         setIsProcessing(false)
         connectingRef.current = false
-        configuredSessionRef.current = false
 
+        // ✅ session.update: instrucciones
         sendEvent({
           type: "session.update",
           session: {
@@ -344,24 +340,22 @@ useEffect(() => {
             instructions: modeInstructions(activeMode),
           },
         })
-        configuredSessionRef.current = true
 
         const formatted = formattedHeadlines()
         if (!formatted) {
-          injectSystemText(
-            `NO HAY TITULARES CARGADOS EN DB PARA HOY.\n` +
-              `Regla: decí "todavía no tengo titulares cargados para hoy" y ofrecé refrescar.`
-          )
+          injectSystemText(`NO HAY TITULARES CARGADOS EN DB PARA HOY.`)
           requestResponse(`Decí: "Todavía no tengo titulares cargados para hoy. ¿Querés que intente actualizar ahora?" y esperá.`)
           return
         }
 
         injectSystemText(`TITULARES HOY (Argentina). Usá SOLO esto:\n${formatted}`)
 
+        // ✅ primer mensaje AL GRANO
         requestResponse(
-          activeMode === "podcast"
-            ? `Arrancá el programa. Leé 7 titulares y terminá con: "¿Cuál querés que amplíe?"`
-            : `Saludá breve. Leé 5 titulares y terminá con: "¿Cuál querés que amplíe?"`
+          `Sin saludar. Preguntá la 1:\n` +
+            `"¿De qué diarios querés los principales titulares hoy? La Nación, Clarín, Ámbito, Cronista, Infobae, Página 12."\n` +
+            `Si el usuario dice "principales" sin diario, listá los 5 más importantes y decí el diario en cada uno. ` +
+            `Luego preguntá: "¿Elegís un diario o querés que amplíe uno de estos titulares?"`
         )
       }
 
@@ -371,15 +365,15 @@ useEffect(() => {
 
           if (evt?.type?.includes("response.completed") || evt?.type?.includes("response.done")) {
             setIsSpeaking(false)
+
+            // ✅ autoListen: si lo tenés activo, seguís escuchando (no desconecta)
+            // No hacemos nada: server_vad ya queda esperando
           }
 
           const transcript =
             (evt?.transcript && typeof evt.transcript === "string" && evt.transcript.trim()) ? evt.transcript.trim() : ""
 
-          if (transcript) {
-            setCurrentText(transcript)
-          }
-
+          if (transcript) setCurrentText(transcript)
           if (!transcript) return
 
           const wantsRefresh =
@@ -391,15 +385,15 @@ useEffect(() => {
             } catch {}
 
             try {
-              const r = await fetch("/api/news?limit=10", { cache: "no-store" })
+              const r = await fetch("/api/news?limit=30", { cache: "no-store" })
               const d = await r.json()
               headlinesCacheRef.current = d?.news || []
               headlinesReadyRef.current = true
             } catch {}
 
-            const formatted = formattedHeadlines()
-            injectSystemText(`TITULARES ACTUALIZADOS HOY (Argentina). Usá SOLO esto:\n${formatted || "(vacío)"}`)
-            requestResponse(`Decí si hay titulares nuevos. Leé 5 titulares y preguntá cuál ampliar.`)
+            const formatted2 = formattedHeadlines()
+            injectSystemText(`TITULARES ACTUALIZADOS HOY (Argentina). Usá SOLO esto:\n${formatted2 || "(vacío)"}`)
+            requestResponse(`Sin saludar. Leé los principales y preguntá cuál ampliar.`)
             return
           }
 
@@ -430,9 +424,9 @@ useEffect(() => {
             )
 
             requestResponse(
-              `Ampliá esta noticia en 30 a 60 segundos. ` +
-                `No inventes nada fuera del contenido. ` +
-                `Después preguntá: "¿Querés que amplíe otro titular o te doy contexto de este?"`
+              activeMode === "podcast"
+                ? `Modo podcast: contá la nota casi completa con hilo conductor, sin inventar, 60-120s. Al final: "¿Amplío otro titular o cambiamos de diario?"`
+                : `Modo conversación: ampliá 30-60s, directo, sin inventar. Al final: "¿Amplío otro titular o cambiamos de diario?"`
             )
           }
         } catch {
@@ -459,7 +453,6 @@ useEffect(() => {
     } catch (e) {
       console.error(e)
       connectingRef.current = false
-      configuredSessionRef.current = false
       setIsProcessing(false)
       setIsListening(false)
       setIsSpeaking(false)
@@ -552,7 +545,6 @@ useEffect(() => {
                 <p className="font-medium">{user.name}</p>
                 <p className="text-sm text-white/40">{user.email}</p>
 
-                {/* ✅ Badge real de suscripción + acceso a pricing */}
                 <div className={`mt-2 px-2 py-1 bg-gradient-to-r ${subscriptionBadge.classes} rounded-full inline-flex items-center gap-2`}>
                   <span className="text-xs font-medium">{subscriptionBadge.label}</span>
                   <button
@@ -568,7 +560,6 @@ useEffect(() => {
               </div>
 
               <div className="p-2">
-                {/* ✅ Mantengo todo lo tuyo y sumo "Mi suscripción" como item */}
                 <button
                   onClick={() => {
                     setMenuOpen(false)
@@ -615,8 +606,8 @@ useEffect(() => {
 
       {/* Main */}
       <main className="relative z-10 flex flex-col items-center justify-center min-h-[calc(100vh-200px)] px-6">
-        {/* Mode Selector */}
-        <div className="flex gap-2 mb-12">
+        {/* Mode pill (opcional, lo dejo porque lo tenías) */}
+        <div className="flex gap-2 mb-10">
           {[
             { id: "conversacion" as const, label: "Conversación" },
             { id: "podcast" as const, label: "Podcast" },
@@ -724,19 +715,18 @@ useEffect(() => {
           </button>
         </div>
 
-        {/* Status Text */}
-        <div className="text-center mb-8 h-24">
+        {/* Status + transcript toggle */}
+        <div className="text-center mb-4">
           {isListening && (
             <div className="animate-fade-in">
               <p className="text-2xl font-light text-[#00f0ff] mb-2">Escuchando…</p>
-              {currentText && <p className="text-lg text-white/60 max-w-md">"{currentText}"</p>}
             </div>
           )}
 
           {isProcessing && (
             <div className="animate-fade-in">
               <p className="text-2xl font-light text-[#ff00aa]">Conectando…</p>
-              <p className="text-sm text-white/30 mt-2">Cargando VOYCE (titulares ya están listos desde la app)</p>
+              <p className="text-sm text-white/30 mt-2">Cargando VOYCE</p>
             </div>
           )}
 
@@ -750,10 +740,46 @@ useEffect(() => {
             <div className="animate-fade-in">
               <p className="text-2xl font-light text-white/40 mb-2">Tocá para hablar</p>
               <p className="text-sm text-white/30">
-                {activeMode === "conversacion" ? "Titulares de hoy + ampliación por elección" : "Modo programa: lectura corrida y luego elegís"}
+                {activeMode === "conversacion"
+                  ? "Titulares de hoy + ampliación por elección"
+                  : "Modo programa: lectura corrida y luego elegís"}
               </p>
             </div>
           )}
+
+          <div className="mt-4 flex justify-center">
+            <button
+              onClick={() => setShowTranscript((v) => !v)}
+              className="px-4 py-2 rounded-full bg-white/5 border border-white/10 hover:bg-white/10 transition-all text-sm text-white/70"
+            >
+              {showTranscript ? "Ocultar transcripción" : "Ver transcripción"}
+            </button>
+          </div>
+        </div>
+
+        {/* Transcript drawer */}
+        <div
+          className={`w-full max-w-2xl transition-all duration-300 overflow-hidden ${
+            showTranscript ? "max-h-60 opacity-100" : "max-h-0 opacity-0"
+          }`}
+        >
+          <div className="mt-2 p-4 bg-white/5 border border-white/10 rounded-2xl text-left">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-semibold text-white/80">Transcripción</p>
+              <button
+                onClick={() => setCurrentText("")}
+                className="text-xs text-white/40 hover:text-white/70 transition-colors"
+              >
+                Limpiar
+              </button>
+            </div>
+
+            {currentText ? (
+              <p className="text-sm text-white/70 whitespace-pre-wrap">{currentText}</p>
+            ) : (
+              <p className="text-sm text-white/40">Todavía no hay texto para mostrar.</p>
+            )}
+          </div>
         </div>
       </main>
 
