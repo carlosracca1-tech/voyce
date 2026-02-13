@@ -36,11 +36,43 @@ function normalizeSpeed(x: any): number {
   return clamp(n, 0.25, 1.5)
 }
 
-// ✅ Mapeo preset -> voz realtime
+// ✅ preset -> voice realtime
 function presetToVoice(preset: VoicePreset) {
   if (preset === "radio_canchero") return "verse"
   if (preset === "podcast_story") return "shimmer"
   return "marin" // radio_pro
+}
+
+function norm(s: string) {
+  return (s || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+}
+
+function guessSourceFromTranscript(t: string) {
+  const x = norm(t)
+
+  // orden importa (primero matches más específicos)
+  if (/(la\s*nacion|nacion)/.test(x)) return "La Nación"
+  if (/(clarin)/.test(x)) return "Clarín"
+  if (/(ambito)/.test(x)) return "Ámbito"
+  if (/(cronista|el\s*cronista)/.test(x)) return "El Cronista"
+  if (/(infobae)/.test(x)) return "Infobae"
+  if (/(pagina\s*12|pagina12)/.test(x)) return "Página 12"
+
+  return null
+}
+
+function wantsTopWithoutSource(t: string) {
+  const x = norm(t)
+  // “principales” / “top” / “lo mas importante” sin elegir un diario
+  return /(principales|top|mas\s*importantes|lo\s*mas\s*importante|titulares\s*principales)/.test(x)
+}
+
+function wantsChangeSource(t: string) {
+  const x = norm(t)
+  return /(otro\s*diario|cambiar\s*diario|cambiemos\s*de\s*diario|ninguno|no\s*me\s*gusta)/.test(x)
 }
 
 export default function Dashboard() {
@@ -87,6 +119,9 @@ export default function Dashboard() {
   // Guards
   const connectingRef = useRef(false)
 
+  // ✅ estado simple de “diario elegido” (solo para ayudar al flujo)
+  const chosenSourceRef = useRef<string | null>(null)
+
   // ---------- Helpers realtime ----------
   const sendEvent = (evt: any) => {
     const dc = dcRef.current
@@ -122,15 +157,30 @@ export default function Dashboard() {
     return micStreamRef.current
   }
 
-  const formattedHeadlines = () => {
-    const list = (headlinesCacheRef.current || []).slice(0, 30)
-    if (!list.length) return ""
-    return list
+  const byImportanceDesc = (a: any, b: any) => {
+    const sa = typeof a?.importance_score === "number" ? a.importance_score : 0
+    const sb = typeof b?.importance_score === "number" ? b.importance_score : 0
+    return sb - sa
+  }
+
+  const formatList = (list: any[], max = 10) => {
+    const slice = (list || []).slice(0, max)
+    if (!slice.length) return ""
+    return slice
       .map((h: any, i: number) => {
         const score = typeof h.importance_score === "number" ? h.importance_score : null
         return `${i + 1}) [id:${h.id}] ${h.title} — ${h.source}${score != null ? ` (score:${score})` : ""}`
       })
       .join("\n")
+  }
+
+  const formattedHeadlines = () => formatList([...headlinesCacheRef.current].sort(byImportanceDesc), 30)
+
+  const listForSource = (sourceName: string) => {
+    const all = headlinesCacheRef.current || []
+    const nsource = norm(sourceName)
+    const filtered = all.filter((h) => norm(String(h?.source ?? "")).includes(nsource))
+    return filtered.sort(byImportanceDesc)
   }
 
   // ---------- Cerrar menú clic afuera ----------
@@ -197,7 +247,7 @@ export default function Dashboard() {
         const r = await fetch("/api/news?limit=30", { cache: "no-store" })
         const d = await r.json()
         if (cancelled) return
-        headlinesCacheRef.current = d?.news || []
+        headlinesCacheRef.current = (d?.news || []).sort(byImportanceDesc)
         headlinesReadyRef.current = true
       } catch {
         if (cancelled) return
@@ -245,7 +295,7 @@ export default function Dashboard() {
     return { label, classes }
   }, [user])
 
-  // ---------- Instrucciones estrictas (AL GRANO) ----------
+  // ---------- Instrucciones (AL GRANO + flujo diarios) ----------
   const baseInstructions = useMemo(() => {
     const todayAR = new Intl.DateTimeFormat("es-AR", {
       timeZone: "America/Argentina/Buenos_Aires",
@@ -257,15 +307,15 @@ export default function Dashboard() {
 
     return (
       `Sos VOYCE, locutor argentino. Fecha (Argentina): ${todayAR}.\n` +
-      `Usás SOLO titulares de HOY que vienen de la DB (lista inyectada). NO inventes.\n` +
+      `Usás SOLO titulares de HOY que vienen de la DB (listas inyectadas). NO inventes.\n` +
       `Reglas duras:\n` +
-      `- No hagas charla social ni saludos largos. Arrancá directo.\n` +
+      `- NO hagas charla social. NO "hola, ¿cómo estás?". Empezá directo con la pregunta de diarios.\n` +
       `- Si piden algo fuera de la lista/artículo: decí "No lo tengo en los titulares de hoy" y volvé a la elección.\n` +
       `Flujo obligatorio:\n` +
       `1) Preguntá: "¿De qué diarios querés los principales titulares hoy? La Nación, Clarín, Ámbito, Cronista, Infobae, Página 12."\n` +
-      `   - Si no elige diario y pide "principales": listá los 5 más importantes y decí el diario en cada uno.\n` +
-      `2) Según el diario elegido: listá los principales titulares ordenados por importancia.\n` +
-      `3) Pedí que elija por número o por id.\n`
+      `2) Si el usuario dice "principales" sin diario: listá TOP 5 por importancia y nombrá el diario en cada uno.\n` +
+      `3) Si elige diario: listá titulares de ESE diario (ordenados por importancia) y pedí elegir por número o id.\n` +
+      `4) Si dice "otro diario"/"ninguno": volvé a la pregunta 1.\n`
     )
   }, [])
 
@@ -273,13 +323,13 @@ export default function Dashboard() {
     if (mode === "podcast") {
       return (
         baseInstructions +
-        `Modo PODCAST: lectura corrida estilo radio. Sin saludos. Mantener hilo.\n` +
-        `Primero diarios, luego titulares como monólogo breve, y al final pedí cuál ampliar.\n`
+        `Modo PODCAST: lectura corrida estilo radio. Sin saludos. Con hilo conductor.\n` +
+        `Cuando listás titulares: hacelo como monólogo breve y al final pedí elegir uno para ampliar.\n`
       )
     }
     return (
       baseInstructions +
-      `Modo CONVERSACIÓN: ida y vuelta. Sin saludos. Preguntá diarios y esperá.\n`
+      `Modo CONVERSACIÓN: ida y vuelta. Sin saludos. Preguntá y esperá.\n`
     )
   }
 
@@ -297,19 +347,18 @@ export default function Dashboard() {
       const voice = presetToVoice(voicePreset)
       const speed = normalizeSpeed(voiceSpeed)
 
-      // ✅ Token efímero con voice+speed (clave)
-      const tokenResp = await fetch(`/api/realtime/token?voice=${encodeURIComponent(voice)}&speed=${encodeURIComponent(String(speed))}`, {
-        cache: "no-store",
-      })
+      // ✅ mint con VOICE + SPEED
+      const tokenResp = await fetch(
+        `/api/realtime/token?voice=${encodeURIComponent(voice)}&speed=${encodeURIComponent(String(speed))}`,
+        { cache: "no-store" }
+      )
       const tokenData = await tokenResp.json()
       const EPHEMERAL_KEY = tokenData?.value
       if (!EPHEMERAL_KEY) throw new Error("No ephemeral key returned from /api/realtime/token")
 
-      // WebRTC
       const pc = new RTCPeerConnection()
       pcRef.current = pc
 
-      // audio remoto
       const audioEl = document.createElement("audio")
       audioEl.autoplay = true
       remoteAudioElRef.current = audioEl
@@ -317,11 +366,9 @@ export default function Dashboard() {
         audioEl.srcObject = e.streams[0]
       }
 
-      // mic
       const ms = await ensureMic()
       ms.getTracks().forEach((t) => pc.addTrack(t))
 
-      // data channel
       const dc = pc.createDataChannel("oai-events")
       dcRef.current = dc
 
@@ -329,8 +376,9 @@ export default function Dashboard() {
         setIsListening(true)
         setIsProcessing(false)
         connectingRef.current = false
+        chosenSourceRef.current = null
 
-        // ✅ session.update: instrucciones
+        // ✅ MUY IMPORTANTE: mandar audio.output acá también
         sendEvent({
           type: "session.update",
           session: {
@@ -338,24 +386,38 @@ export default function Dashboard() {
             turn_detection: { type: "server_vad" },
             input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
             instructions: modeInstructions(activeMode),
+            audio: { output: { voice, speed } },
           },
         })
 
-        const formatted = formattedHeadlines()
-        if (!formatted) {
+        const allFormatted = formattedHeadlines()
+        if (!allFormatted) {
           injectSystemText(`NO HAY TITULARES CARGADOS EN DB PARA HOY.`)
-          requestResponse(`Decí: "Todavía no tengo titulares cargados para hoy. ¿Querés que intente actualizar ahora?" y esperá.`)
+          requestResponse(`Decí directo: "Todavía no tengo titulares cargados para hoy. ¿Querés que intente actualizar ahora?"`)
           return
         }
 
-        injectSystemText(`TITULARES HOY (Argentina). Usá SOLO esto:\n${formatted}`)
+        // Inyectamos: 1) lista completa 2) listas por diario (para que el modelo no improvise)
+        const sources = ["La Nación", "Clarín", "Ámbito", "El Cronista", "Infobae", "Página 12"]
+        const perSourceBlocks = sources
+          .map((s) => {
+            const list = listForSource(s)
+            const block = formatList(list, 12)
+            return `\n=== ${s.toUpperCase()} ===\n${block || "(sin titulares)"}`
+          })
+          .join("\n")
 
-        // ✅ primer mensaje AL GRANO
+        injectSystemText(
+          `TITULARES HOY (Argentina) - ORDENADOS POR IMPORTANCIA.\n` +
+          `Lista completa (top 30):\n${allFormatted}\n\n` +
+          `Listas por diario:\n${perSourceBlocks}\n`
+        )
+
+        // ✅ Arranque AL GRANO: pregunta diarios
         requestResponse(
-          `Sin saludar. Preguntá la 1:\n` +
-            `"¿De qué diarios querés los principales titulares hoy? La Nación, Clarín, Ámbito, Cronista, Infobae, Página 12."\n` +
-            `Si el usuario dice "principales" sin diario, listá los 5 más importantes y decí el diario en cada uno. ` +
-            `Luego preguntá: "¿Elegís un diario o querés que amplíe uno de estos titulares?"`
+          `Sin saludar. Preguntá textual:\n` +
+          `"¿De qué diarios querés los principales titulares hoy? La Nación, Clarín, Ámbito, Cronista, Infobae, Página 12."\n` +
+          `Si responde "principales" sin elegir diario: leé TOP 5 (con diario) y preguntá si elige un diario o un titular.\n`
         )
       }
 
@@ -365,9 +427,6 @@ export default function Dashboard() {
 
           if (evt?.type?.includes("response.completed") || evt?.type?.includes("response.done")) {
             setIsSpeaking(false)
-
-            // ✅ autoListen: si lo tenés activo, seguís escuchando (no desconecta)
-            // No hacemos nada: server_vad ya queda esperando
           }
 
           const transcript =
@@ -376,8 +435,47 @@ export default function Dashboard() {
           if (transcript) setCurrentText(transcript)
           if (!transcript) return
 
+          // 0) Cambio de diario / ninguno
+          if (wantsChangeSource(transcript)) {
+            chosenSourceRef.current = null
+            requestResponse(
+              `Sin saludar. Volvé a preguntar:\n` +
+              `"¿De qué diarios querés los principales titulares hoy? La Nación, Clarín, Ámbito, Cronista, Infobae, Página 12."`
+            )
+            return
+          }
+
+          // 1) “principales” sin diario
+          const pickedSource = guessSourceFromTranscript(transcript)
+          if (!pickedSource && wantsTopWithoutSource(transcript)) {
+            const top5 = [...(headlinesCacheRef.current || [])].sort(byImportanceDesc).slice(0, 5)
+            injectSystemText(`TOP 5 PRINCIPALES (HOY - DB):\n${formatList(top5, 5)}`)
+            requestResponse(
+              activeMode === "podcast"
+                ? `Leé estos 5 como monólogo corto y al final preguntá: "¿Querés elegir un diario o amplío uno de estos? Decime número o id."`
+                : `Leé estos 5 y preguntá: "¿Querés elegir un diario o amplío uno de estos? Decime número o id."`
+            )
+            return
+          }
+
+          // 2) Eligió un diario
+          if (pickedSource) {
+            chosenSourceRef.current = pickedSource
+            const list = listForSource(pickedSource)
+            const topN = activeMode === "podcast" ? 7 : 5
+            injectSystemText(`DIARIO ELEGIDO: ${pickedSource}\nTITULARES DISPONIBLES:\n${formatList(list, 12) || "(sin titulares)"}`)
+
+            requestResponse(
+              activeMode === "podcast"
+                ? `Sin saludar. Leé ${topN} titulares de ${pickedSource} (por importancia) como monólogo breve y al final: "¿Cuál querés que amplíe? Decime número o id."`
+                : `Sin saludar. Leé ${topN} titulares de ${pickedSource} (por importancia) y al final: "¿Cuál querés que amplíe? Decime número o id."`
+            )
+            return
+          }
+
+          // 3) Refresh manual (si lo pedís)
           const wantsRefresh =
-            /actualiz(a|á)|refresc(a|á)|recarg(a|á)|descarg(a|á)\s+de\s+nuevo|nuevas\s+noticias/i.test(transcript)
+            /actualiz(a|á)|refresc(a|á)|recarg(a|á)|descarg(a|á)\s+de\s+nuevo|nuevas\s+noticias/i.test(norm(transcript))
 
           if (wantsRefresh) {
             try {
@@ -387,16 +485,18 @@ export default function Dashboard() {
             try {
               const r = await fetch("/api/news?limit=30", { cache: "no-store" })
               const d = await r.json()
-              headlinesCacheRef.current = d?.news || []
+              headlinesCacheRef.current = (d?.news || []).sort(byImportanceDesc)
               headlinesReadyRef.current = true
             } catch {}
 
-            const formatted2 = formattedHeadlines()
-            injectSystemText(`TITULARES ACTUALIZADOS HOY (Argentina). Usá SOLO esto:\n${formatted2 || "(vacío)"}`)
-            requestResponse(`Sin saludar. Leé los principales y preguntá cuál ampliar.`)
+            requestResponse(
+              `Sin saludar. Decí si hay novedades y volvé a preguntar:\n` +
+              `"¿De qué diarios querés los principales titulares hoy? La Nación, Clarín, Ámbito, Cronista, Infobae, Página 12."`
+            )
             return
           }
 
+          // 4) Selección por número o id (para ampliar)
           const numMatch = transcript.match(/\b(?:la|el)\s+(\d{1,2})\b/i)
           const idMatch = transcript.match(/\bid\s*[:#]?\s*(\d+)\b/i)
 
@@ -406,8 +506,8 @@ export default function Dashboard() {
             pickedId = Number(idMatch[1])
           } else if (numMatch) {
             const idx = Number(numMatch[1]) - 1
-            const list = headlinesCacheRef.current || []
-            if (idx >= 0 && idx < list.length) pickedId = list[idx].id
+            const listBase = chosenSourceRef.current ? listForSource(chosenSourceRef.current) : (headlinesCacheRef.current || [])
+            if (idx >= 0 && idx < listBase.length) pickedId = listBase[idx].id
           }
 
           if (!pickedId) return
@@ -419,8 +519,8 @@ export default function Dashboard() {
             const a = aData.article
             injectSystemText(
               `ARTÍCULO SELECCIONADO (HOY - DB). Usá SOLO esto.\n` +
-                `Título: ${a.title}\nFuente: ${a.source}\nFecha: ${a.published_at}\nLink: ${a.link}\n\n` +
-                `Resumen: ${a.summary ?? ""}\n\nContenido:\n${a.content ?? ""}`
+              `Título: ${a.title}\nFuente: ${a.source}\nFecha: ${a.published_at}\nLink: ${a.link}\n\n` +
+              `Resumen: ${a.summary ?? ""}\n\nContenido:\n${a.content ?? ""}`
             )
 
             requestResponse(
@@ -606,7 +706,7 @@ export default function Dashboard() {
 
       {/* Main */}
       <main className="relative z-10 flex flex-col items-center justify-center min-h-[calc(100vh-200px)] px-6">
-        {/* Mode pill (opcional, lo dejo porque lo tenías) */}
+        {/* Mode pill (lo dejo como estaba) */}
         <div className="flex gap-2 mb-10">
           {[
             { id: "conversacion" as const, label: "Conversación" },

@@ -5,16 +5,16 @@ export const dynamic = "force-dynamic"
 export const revalidate = 0
 
 const ALLOWED_VOICES = new Set([
+  "marin",
   "alloy",
-  "ash",
-  "ballad",
-  "coral",
-  "echo",
-  "sage",
   "shimmer",
   "verse",
-  "marin",
+  "echo",
+  "sage",
+  "coral",
+  "ash",
   "cedar",
+  "ballad",
 ])
 
 function clamp(n: number, min: number, max: number) {
@@ -28,34 +28,28 @@ function parseVoice(v: string | null) {
 
 function parseSpeed(v: string | null) {
   const n = Number(v)
-  if (!Number.isFinite(n)) return 1.15
+  // rango razonable para realtime (lo podés ajustar)
+  if (!Number.isFinite(n)) return 1.0
   return clamp(n, 0.25, 1.5)
 }
 
 export async function GET(req: Request) {
   try {
     const apiKey = process.env.OPENAI_API_KEY
-    if (!apiKey) {
-      return NextResponse.json({ error: "OPENAI_API_KEY missing" }, { status: 500 })
-    }
+    if (!apiKey) return NextResponse.json({ error: "OPENAI_API_KEY missing" }, { status: 500 })
 
     const { searchParams } = new URL(req.url)
+
     const voice = parseVoice(searchParams.get("voice"))
     const speed = parseSpeed(searchParams.get("speed"))
 
-    // ✅ Importante: NO metemos "warm engaging" ni cosas raras acá.
-    // La personalidad la controlamos desde el Dashboard con session.update + system injection.
+    // ✅ Realtime: voz/velocidad se setean en session.audio.output.voice/speed
     const sessionConfig = {
       session: {
         type: "realtime",
         model: "gpt-realtime",
-        modalities: ["audio", "text"],
-        voice,
-        speed,
-
-        // compat con tu formato anterior
         audio: {
-          output: { voice },
+          output: { voice, speed },
         },
       },
     }
@@ -70,12 +64,12 @@ export async function GET(req: Request) {
     })
 
     if (!resp.ok) {
-      const text = await resp.text()
-      return NextResponse.json({ error: "token_mint_failed", detail: text }, { status: 500 })
+      const detail = await resp.text()
+      return NextResponse.json({ error: "token_mint_failed", detail }, { status: 500 })
     }
 
     const data = await resp.json()
-    return NextResponse.json(data)
+    return NextResponse.json({ ...data, debugVoice: voice, debugSpeed: speed })
   } catch (e: any) {
     return NextResponse.json({ error: "internal_error", detail: e?.message ?? String(e) }, { status: 500 })
   }
