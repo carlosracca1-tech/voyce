@@ -12,9 +12,11 @@ function clamp(n: number, min: number, max: number) {
 }
 
 function mapOpenAIVoice(preset?: VoicePreset) {
-  if (preset === "radio_canchero") return "nova"
-  if (preset === "podcast_story") return "shimmer"
-  return "alloy" // radio_pro default (compatible con lo que ya tenías)
+  // Forcing a consistent masculine default voice to match assistant instructions.
+  // Use 'marin' as the male default voice; adjust if you prefer another OpenAI voice.
+  if (preset === "radio_canchero") return "marin"
+  if (preset === "podcast_story") return "marin"
+  return "marin" // radio_pro default
 }
 
 function normalizeMode(x: any): PreferredMode {

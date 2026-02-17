@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server"
+import { guessSourceFromTranscript, wantsTopWithoutSource } from '@/lib/voyce/intents'
+import { presetToVoice } from '@/lib/voyce/voice'
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -165,28 +167,38 @@ async function getArticleForPodcast(sql: any, id: number) {
 // -----------------------------
 // Voice Prompting
 // -----------------------------
+const todayAR = new Intl.DateTimeFormat("es-AR", {
+  timeZone: "America/Argentina/Buenos_Aires",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+}).format(new Date())
+
 const BASE_RULES = `
-Sos VOYCE, locutor argentino premium: claro, confiable y fácil de escuchar en auto.
-Reglas:
-- SIEMPRE decís el diario/fuente al citar un titular o dato.
-- No inventes: si falta info, decí "no tengo el dato exacto" o "no lo veo en la nota".
-- Nada de emojis.
-- Frases cortas. Natural, humano.
-- Prioridad temática por impacto: economía > energía/mercados > política (impacto económico) > resto.
+Sos VOYCE, locutor argentino. Fecha (Argentina): ${todayAR}.
+Vas directo al grano: sin saludos, sin cháchara, sin opiniones personales.
+Usá SOLO titulares de HOY que vienen de la DB. NO inventes.
+SIEMPRE nombrá la fuente al citar un titular (ej: "1. Titular — La Nación").
+Frases cortas y enfocadas en datos relevantes. Nada de emojis.
+No preguntes ni converses: evitá comentarios tipo "bien, ¿y vos?" o respuestas coloquiales.
+Prioridad temática por impacto: economía > energía/mercados > política (impacto económico) > resto.
+Si el usuario pide información que NO está en la DB: decí exactamente "No lo tengo en los titulares de hoy. Voy a buscar en internet y vuelvo con información 100% actualizada (2026)." y finalizá la respuesta breve. Luego el sistema podrá realizar la búsqueda externa si está habilitada.
 `.trim()
 
 const STYLE_RADIO_PRO = `
-Estilo: profesional, sobrio, eficiente. Cero relleno.
+Estilo: formal, masculino y atrapante. Voz grave y segura; ritmo que mantiene la atención.
+Sé directo y extremadamente claro: frases cortas, precisión en datos y enfoque en lo relevante.
 Conectores permitidos: "Clave", "El punto es", "Qué mirar", "Vamos con esto".
 `.trim()
 
 const STYLE_RADIO_CANCHERO = `
-Estilo: cercano y argentino, pero prolijo. Una pizca de humor si suma.
+Estilo: cercano pero controlado; masculino y con presencia. Menos humor, más concreción.
 Conectores permitidos: "Che, mirá", "Dato", "Ojo con esto", "Para llevar".
 `.trim()
 
 const STYLE_PODCAST_STORY = `
-Estilo: narrativo, con hilo conductor, sin listas largas.
+Estilo: narrativo y envolvente, narrador masculino y formal; estructurado para atrapar al oyente.
+Evitá listas largas; priorizá un hilo claro y datos comprobables.
 Conectores permitidos: "Arranquemos por el principio", "Contexto", "Qué significa", "Cierre".
 `.trim()
 
@@ -227,16 +239,13 @@ MODO CONVERSACIONAL:
 // UX text
 // -----------------------------
 function askSourceQuestion() {
-  return `¿De qué diarios querés escuchar los principales titulares de hoy?
-Podés elegir uno o varios: La Nación, Clarín, Ámbito, El Cronista, Infobae, Página 12.
-Si preferís, decime “principales” y te leo un top 5 mezclado diciendo de qué diario es cada uno.
-¿Qué elegís?`
+  return `¿Qué diarios querés escuchar hoy? Elegí uno o varios: La Nación, Clarín, Ámbito, El Cronista, Infobae, Página 12. O decí "principales" para un TOP 5 mezclado.`
 }
 
 function formatHeadlinesIntro(sources: string[] | null) {
-  if (!sources?.length) return `Dale. Te leo los 5 titulares más importantes de hoy (mezclando fuentes) y te digo de qué diario es cada uno:`
-  if (sources.length === 1) return `Perfecto. Te leo los principales titulares de **${sources[0]}** de hoy, ordenados por importancia:`
-  return `Perfecto. Te leo los principales titulares de hoy de: **${sources.join(", ")}**, ordenados por importancia:`
+  if (!sources?.length) return `A continuación, los 5 titulares más importantes de hoy (mezcla de fuentes):`
+  if (sources.length === 1) return `A continuación, los principales titulares de **${sources[0]}** hoy, ordenados por importancia:`
+  return `A continuación, los principales titulares de hoy de: **${sources.join(", ")}**, ordenados por importancia:`
 }
 
 function formatHeadlinesList(headlines: any[], max = 5) {
@@ -268,6 +277,29 @@ export async function POST(request: Request) {
 
     if (!message) return NextResponse.json({ error: "Mensaje requerido" }, { status: 400 })
 
+    // --- Helpers: sanitize + send JSON response ---
+    function sanitizeAssistantText(s: string, allowGreeting = false) {
+      if (!s) return s
+      if (allowGreeting) return s
+      // Remove leading greetings like "hola", "hola hola", "buenos días" etc.
+      const cleaned = s.replace(/^(\s*(hola|buenos\s*d[ií]as|buenas\s*tardes|buenas\s*noches)\b[\s,!.\-–—]*)+/i, "").trim()
+      return cleaned || s
+    }
+
+    function sendJsonResponse(text: string, convId: number | null, opts?: { voicePreset?: VoicePreset; mode?: TalkMode }) {
+      // allow greeting for first-response (no conversation id)
+      const allowGreeting = convId == null
+      const out = sanitizeAssistantText(text, allowGreeting)
+      return NextResponse.json({
+        response: out,
+        conversationId: convId ?? null,
+        voicePreset: opts?.voicePreset ?? "radio_pro",
+        mode: opts?.mode ?? "news",
+        ttsVoice: presetToVoice(opts?.voicePreset ?? "radio_pro"),
+        useServerTTS: Boolean(process.env.OPENAI_API_KEY),
+      })
+    }
+
     // --- DB ---
     let sql: any = null
     if (process.env.DATABASE_URL) {
@@ -277,15 +309,41 @@ export async function POST(request: Request) {
 
     // Sin DB: devolvemos solo la pregunta base
     if (!sql) {
-      return NextResponse.json({
-        response: askSourceQuestion(),
-        conversationId: conversationId ?? null,
-      })
+      const greeting = `Hola. Soy VOYCE, locutor de noticias. ${askSourceQuestion()}`
+      return sendJsonResponse(greeting, conversationId ?? null)
     }
 
     // --- Conversación (si hay userId) ---
     const userId = tryGetUserIdFromBearer(request.headers.get("authorization"))
     let savedConversationId = conversationId
+
+    // --- Instrumentación: logueo de interacción de usuario (no bloqueante)
+    try {
+      const detectedSources = parseSourcesFromText(message) || []
+      const guessedSource = detectedSources[0] ?? (typeof guessSourceFromTranscript === 'function' ? guessSourceFromTranscript(message) : null) ?? null
+      const detectedTopic = typeof wantsTopWithoutSource === 'function' && wantsTopWithoutSource(message) ? 'headlines' : null
+
+      if (sql && userId) {
+        ;(async () => {
+          try {
+            await sql`
+              INSERT INTO user_interactions (user_id, type, source, topic, message)
+              VALUES (${userId}, 'user_message', ${guessedSource}, ${detectedTopic}, ${message})
+            `
+
+            await sql`
+              INSERT INTO user_preferences (user_id, last_interaction_at)
+              VALUES (${userId}, now())
+              ON CONFLICT (user_id) DO UPDATE SET last_interaction_at = now()
+            `
+          } catch (e) {
+            console.error('Failed to log user interaction:', e)
+          }
+        })()
+      }
+    } catch (e) {
+      console.error('Interaction instrumentation error:', e)
+    }
 
     if (userId && !savedConversationId) {
   const convResult = await sql`
@@ -354,12 +412,13 @@ export async function POST(request: Request) {
         askSourceQuestion()
 
       if (savedConversationId && userId) {
+        const sanitized = sanitizeAssistantText(response, savedConversationId == null)
         await sql`insert into messages (conversation_id, role, content) values (${savedConversationId}, 'user', ${message})`
-        await sql`insert into messages (conversation_id, role, content) values (${savedConversationId}, 'assistant', ${response})`
+        await sql`insert into messages (conversation_id, role, content) values (${savedConversationId}, 'assistant', ${sanitized})`
         await sql`update conversations set updated_at = now() where id = ${savedConversationId}`
       }
 
-      return NextResponse.json({ response, conversationId: savedConversationId })
+      return sendJsonResponse(response, savedConversationId, { voicePreset: finalVoice, mode: finalMode })
     }
 
     // -----------------------------
@@ -375,15 +434,16 @@ export async function POST(request: Request) {
         })
       }
 
-      const response = askSourceQuestion()
+      const response = savedConversationId == null ? `Hola. Soy VOYCE, locutor de noticias. ${askSourceQuestion()}` : askSourceQuestion()
 
       if (savedConversationId && userId) {
+        const sanitized = sanitizeAssistantText(response, savedConversationId == null)
         await sql`insert into messages (conversation_id, role, content) values (${savedConversationId}, 'user', ${message})`
-        await sql`insert into messages (conversation_id, role, content) values (${savedConversationId}, 'assistant', ${response})`
+        await sql`insert into messages (conversation_id, role, content) values (${savedConversationId}, 'assistant', ${sanitized})`
         await sql`update conversations set updated_at = now() where id = ${savedConversationId}`
       }
 
-      return NextResponse.json({ response, conversationId: savedConversationId })
+      return sendJsonResponse(response, savedConversationId, { voicePreset: finalVoice, mode: finalMode })
     }
 
     // B) ¿Eligió diarios o pidió “principales”?
@@ -392,15 +452,16 @@ export async function POST(request: Request) {
 
     // Si no eligió diarios y no pidió “principales” y no hay sources en estado → preguntar
     if (!explicitSources?.length && !topMixed && !state?.sources) {
-      const response = askSourceQuestion()
+      const response = savedConversationId == null ? `Hola. Soy VOYCE, locutor de noticias. ${askSourceQuestion()}` : askSourceQuestion()
 
       if (savedConversationId && userId) {
+        const sanitized = sanitizeAssistantText(response, savedConversationId == null)
         await sql`insert into messages (conversation_id, role, content) values (${savedConversationId}, 'user', ${message})`
-        await sql`insert into messages (conversation_id, role, content) values (${savedConversationId}, 'assistant', ${response})`
+        await sql`insert into messages (conversation_id, role, content) values (${savedConversationId}, 'assistant', ${sanitized})`
         await sql`update conversations set updated_at = now() where id = ${savedConversationId}`
       }
 
-      return NextResponse.json({ response, conversationId: savedConversationId })
+      return sendJsonResponse(response, savedConversationId, { voicePreset: finalVoice, mode: finalMode })
     }
 
     // Fuentes = explícitas o las del estado (o null para mixed)
@@ -413,7 +474,7 @@ export async function POST(request: Request) {
       const picked = state.lastHeadlines[choice - 1]
       if (!picked?.id) {
         const response = `No llegué a agarrar ese titular. ¿Me decís el número exacto del 1 al ${state.lastHeadlines.length}?`
-        return NextResponse.json({ response, conversationId: savedConversationId })
+        return sendJsonResponse(response, savedConversationId, { voicePreset: finalVoice, mode: finalMode })
       }
 
       const article = await getArticleForPodcast(sql, picked.id)
@@ -424,6 +485,7 @@ export async function POST(request: Request) {
           : String(article?.summary || picked.summary || "")
 
       const system = buildSystem(finalMode, finalVoice)
+      if (process.env.NODE_ENV === 'development') console.debug('Chat: system prompt (article):', system.slice(0, 600))
 
       let response = ""
       if (process.env.OPENAI_API_KEY) {
@@ -451,12 +513,13 @@ ${content}
       }
 
       if (savedConversationId && userId) {
+        const sanitized = sanitizeAssistantText(response, savedConversationId == null)
         await sql`insert into messages (conversation_id, role, content) values (${savedConversationId}, 'user', ${message})`
-        await sql`insert into messages (conversation_id, role, content) values (${savedConversationId}, 'assistant', ${response})`
+        await sql`insert into messages (conversation_id, role, content) values (${savedConversationId}, 'assistant', ${sanitized})`
         await sql`update conversations set updated_at = now() where id = ${savedConversationId}`
       }
 
-      return NextResponse.json({ response, conversationId: savedConversationId })
+      return sendJsonResponse(response, savedConversationId, { voicePreset: finalVoice, mode: finalMode })
     }
 
     // D) Listar titulares por importancia
@@ -475,13 +538,59 @@ ${content}
       })
     }
 
+    // Si estamos en MODO PODCAST y hay una fuente seleccionada (o topMixed), generamos
+    // un monólogo tipo podcast que cubra los titulares en vez de la lista breve.
+    const userAskedSpecificSource = Boolean(explicitSources?.length || (state?.sources && state.sources.length))
+    if (finalMode === "podcast" && (userAskedSpecificSource || topMixed)) {
+      const system = buildSystem(finalMode, finalVoice)
+        if (process.env.NODE_ENV === 'development') console.debug('Chat: system prompt (podcast):', system.slice(0, 600))
+
+      let response = ""
+      if (process.env.OPENAI_API_KEY) {
+        const { generateText } = await import("ai")
+        const { openai } = await import("@ai-sdk/openai")
+
+        const combined = headlines
+          .slice(0, 7)
+          .map((h, i) => `${i + 1}. ${h.title} — ${h.source}\n${String(h.summary || "")}`)
+          .join("\n\n")
+
+        const prompt = `Generá un monólogo estilo podcast (voz masculina, formal y atrapante) sobre estos titulares:\n\n${combined}\n\nComenzá nombrando las fuentes y contá las noticias con hilo conductor, priorizando los datos más relevantes. Cerrá con UNA pregunta para seguir.`
+
+        const result = await generateText({
+          model: openai("gpt-4o-mini"),
+          system,
+          prompt,
+          maxTokens: 900,
+        })
+
+        response = result.text
+      } else {
+        // Fallback demo monólogo
+        response = headlines
+          .slice(0, 5)
+          .map((h, i) => `${i + 1}. ${h.title} — ${h.source}\n${h.summary || ""}`)
+          .join("\n\n")
+        response = `Monólogo (demo):\n\n${response}\n\n¿Desea que profundice alguna de estas notas?`
+      }
+
+      if (savedConversationId && userId) {
+        const sanitized = sanitizeAssistantText(response, savedConversationId == null)
+        await sql`insert into messages (conversation_id, role, content) values (${savedConversationId}, 'user', ${message})`
+        await sql`insert into messages (conversation_id, role, content) values (${savedConversationId}, 'assistant', ${sanitized})`
+        await sql`update conversations set updated_at = now() where id = ${savedConversationId}`
+      }
+
+      return sendJsonResponse(response, savedConversationId, { voicePreset: finalVoice, mode: finalMode })
+    }
+
     const intro = formatHeadlinesIntro(topMixed ? null : sources)
     const list = formatHeadlinesList(headlines, 5)
 
     const response =
       `${intro}\n\n${list}\n\n` +
-      `¿Cuál querés que te cuente? ` +
-      `Si no te gusta ninguno, decime “otro diario” y cambiamos. ` +
+      `¿Cuál desea que amplíe? ` +
+      `Si no desea ninguno, diga "otro diario" para cambiar. ` +
       `\n\n(Actual: modo ${describeMode(finalMode)} · voz ${describeVoice(finalVoice)})`
 
     if (savedConversationId && userId) {
@@ -490,7 +599,7 @@ ${content}
       await sql`update conversations set updated_at = now() where id = ${savedConversationId}`
     }
 
-    return NextResponse.json({ response, conversationId: savedConversationId })
+    return sendJsonResponse(response, savedConversationId, { voicePreset: finalVoice, mode: finalMode })
   } catch (error) {
     console.error("Chat error:", error)
     return NextResponse.json({ error: "Error procesando tu mensaje" }, { status: 500 })

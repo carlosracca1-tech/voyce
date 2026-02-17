@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { buildSystem } from '@/lib/voyce/instructions'
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -42,12 +43,21 @@ export async function GET(req: Request) {
 
     const voice = parseVoice(searchParams.get("voice"))
     const speed = parseSpeed(searchParams.get("speed"))
+    const modeParam = String(searchParams.get("mode") ?? "news").toLowerCase()
+    const presetParam = String(searchParams.get("preset") ?? "radio_pro")
 
-    // ✅ Realtime: voz/velocidad se setean en session.audio.output.voice/speed
+    const mode = modeParam === "podcast" ? "podcast" : "news"
+    const preset = (presetParam === "radio_canchero" || presetParam === "podcast_story") ? presetParam : "radio_pro"
+
+    // Build the VOYCE system instructions to include at session creation
+    const instructions = buildSystem(mode as any, preset as any)
+
+    // ✅ Realtime: voz/velocidad e instrucciones se setean en session.audio.output.voice/speed
     const sessionConfig = {
       session: {
         type: "realtime",
         model: "gpt-realtime",
+        instructions,
         audio: {
           output: { voice, speed },
         },
@@ -69,7 +79,7 @@ export async function GET(req: Request) {
     }
 
     const data = await resp.json()
-    return NextResponse.json({ ...data, debugVoice: voice, debugSpeed: speed })
+    return NextResponse.json({ ...data, debugVoice: voice, debugSpeed: speed, debugMode: mode, debugPreset: preset, debugInstructions: instructions.slice(0, 800) })
   } catch (e: any) {
     return NextResponse.json({ error: "internal_error", detail: e?.message ?? String(e) }, { status: 500 })
   }

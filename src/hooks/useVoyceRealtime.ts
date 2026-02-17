@@ -3,7 +3,7 @@
 import { useRef, useState } from "react"
 import type { Mode, VoicePreset } from "@/lib/voyce/types"
 import { presetToVoice, safeSpeed } from "@/lib/voyce/voice"
-import { modeInstructions } from "@/lib/voyce/instructions"
+import { buildSystem } from "@/lib/voyce/instructions"
 import { byImportanceDesc, formatList, listForSource } from "@/lib/voyce/headlines"
 import { guessSourceFromTranscript, wantsChangeSource, wantsTopWithoutSource, wantsRefresh, extractPick } from "@/lib/voyce/intents"
 
@@ -149,7 +149,9 @@ export function useVoyceRealtime({
       const speed = safeSpeed(voiceSpeed)
 
       const tokenResp = await fetch(
-        `/api/realtime/token?voice=${encodeURIComponent(voice)}&speed=${encodeURIComponent(String(speed))}`,
+        `/api/realtime/token?voice=${encodeURIComponent(voice)}&speed=${encodeURIComponent(String(
+          speed
+        ))}&mode=${encodeURIComponent(activeMode)}&preset=${encodeURIComponent(voicePreset)}`,
         { cache: "no-store" }
       )
       const tokenData = await tokenResp.json()
@@ -178,13 +180,16 @@ export function useVoyceRealtime({
         connectingRef.current = false
         chosenSourceRef.current = null
 
+        // Send a detailed system prompt so the realtime model speaks as VOYCE
+        const instructionsText = buildSystem(activeMode as any, (voicePreset as any) || "radio_pro")
+        if (process.env.NODE_ENV === 'development') console.debug('Realtime: sending system instructions:', instructionsText.slice(0,600))
         sendEvent({
           type: "session.update",
           session: {
             type: "realtime",
             turn_detection: { type: "server_vad" },
             input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
-            instructions: modeInstructions(activeMode),
+            instructions: instructionsText,
             audio: { output: { voice, speed } },
           },
         })
