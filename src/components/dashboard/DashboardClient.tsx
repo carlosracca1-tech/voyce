@@ -133,10 +133,10 @@ export default function DashboardClient() {
 
           {/* ✅ BLOQUE INFERIOR “anclado” (no empuja la orbe) */}
           <div className="absolute left-1/2 -translate-x-1/2 bottom-8 w-full max-w-3xl px-6">
-            {/* Mute + botón transcripción */}
-            {isLive && (
-              <div className="flex flex-col items-center gap-5">
-                {/* 🔵 MUTE grande */}
+            {/* Mute (solo cuando hay sesión) + botón transcripción (siempre visible) */}
+            <div className="flex flex-col items-center gap-5">
+              {/* 🔵 MUTE grande (solo si está "live") */}
+              {isLive ? (
                 <button
                   onClick={realtime.toggleMute}
                   aria-label={realtime.isMuted ? "Activar micrófono" : "Mutear micrófono"}
@@ -150,21 +150,24 @@ export default function DashboardClient() {
                 >
                   <MicIcon muted={realtime.isMuted} />
                 </button>
+              ) : (
+                // Mantener el espacio visual aunque no haya sesión
+                <div className="w-20 h-20" />
+              )}
 
-                {/* 🔹 Botón transcripción (distinto al mute) */}
-                <button
-                  onClick={() => setShowTranscript((v) => !v)}
-                  className="px-6 py-2 rounded-full border border-white/10 text-white/45 hover:text-white/70 hover:border-white/20 transition-all text-sm"
-                >
-                  {showTranscript ? "Ocultar transcripción" : "Ver transcripción"}
-                </button>
-              </div>
-            )}
+              {/* 🔹 Botón transcripción (siempre disponible) */}
+              <button
+                onClick={() => setShowTranscript((v) => !v)}
+                className="px-6 py-2 rounded-full border border-white/10 text-white/45 hover:text-white/70 hover:border-white/20 transition-all text-sm"
+              >
+                {showTranscript ? "Ocultar transcripción" : "Ver transcripción"}
+              </button>
+            </div>
 
-            {/* Drawer (más abajo, sin mover nada) */}
-            {isLive && showTranscript && (
-              <div className="mt-6">
-                <TranscriptDrawer show={showTranscript} text={realtime.currentText} onClear={() => realtime.setCurrentText("")} />
+            {/* Drawer (se abre solo si el usuario lo solicita) - posicionada debajo de la órbita para no taparla */}
+            {showTranscript && (
+              <div className="absolute left-1/2 top-[65%] -translate-x-1/2 w-full px-6 pointer-events-auto">
+                <TranscriptDrawer show={showTranscript} text={realtime.currentText} onClose={() => setShowTranscript(false)} onClear={() => realtime.setCurrentText("")} />
               </div>
             )}
           </div>

@@ -182,7 +182,7 @@ SIEMPRE nombrá la fuente al citar un titular (ej: "1. Titular — La Nación").
 Frases cortas y enfocadas en datos relevantes. Nada de emojis.
 No preguntes ni converses: evitá comentarios tipo "bien, ¿y vos?" o respuestas coloquiales.
 Prioridad temática por impacto: economía > energía/mercados > política (impacto económico) > resto.
-Si el usuario pide información que NO está en la DB: decí exactamente "No lo tengo en los titulares de hoy. Voy a buscar en internet y vuelvo con información 100% actualizada (2026)." y finalizá la respuesta breve. Luego el sistema podrá realizar la búsqueda externa si está habilitada.
+Si el usuario pide información que NO está en la DB: decí exactamente "No lo tengo en los titulares de hoy. Voy a buscar en internet y vuelvo con información 100% actualizada." y finalizá la respuesta breve. Luego el sistema podrá realizar la búsqueda externa si está habilitada.
 `.trim()
 
 const STYLE_RADIO_PRO = `
@@ -286,7 +286,7 @@ export async function POST(request: Request) {
       return cleaned || s
     }
 
-    function sendJsonResponse(text: string, convId: number | null, opts?: { voicePreset?: VoicePreset; mode?: TalkMode }) {
+    function sendJsonResponse(text: string, convId: number | null, opts?: { voicePreset?: VoicePreset; mode?: TalkMode; extras?: any }) {
       // allow greeting for first-response (no conversation id)
       const allowGreeting = convId == null
       const out = sanitizeAssistantText(text, allowGreeting)
@@ -297,7 +297,27 @@ export async function POST(request: Request) {
         mode: opts?.mode ?? "news",
         ttsVoice: presetToVoice(opts?.voicePreset ?? "radio_pro"),
         useServerTTS: Boolean(process.env.OPENAI_API_KEY),
+        ...(opts?.extras ?? {}),
       })
+    }
+
+    function formatHeadlinesForSpeech(sources: string[] | null, headlines: any[], max = 5) {
+      if (!headlines || !headlines.length) return "No encontré titulares para hoy."
+      // Group by source and produce natural sentences: "En <source>: <title>."
+      const bySource: Record<string, any[]> = {}
+      for (const h of headlines.slice(0, max)) {
+        const s = h.source || "fuente"
+        bySource[s] = bySource[s] || []
+        bySource[s].push(h)
+      }
+      const parts: string[] = []
+      for (const [source, items] of Object.entries(bySource)) {
+        const first = items[0]
+        // Build a concise spoken block
+        const titles = items.map((it) => `${it.title}`).join("; ")
+        parts.push(`En ${source}: ${titles}.`)
+      }
+      return parts.join(" ")
     }
 
     // --- DB ---
@@ -383,6 +403,9 @@ export async function POST(request: Request) {
     // 2) Resolver modo final: comando > requestedMode > state
     const finalMode: TalkMode = (cmdMode ?? requestedMode ?? stateMode) as TalkMode
     const finalVoice: VoicePreset = (cmdVoice ?? stateVoice) as VoicePreset
+
+    // Extras holder for responses (spoken versions, background flags)
+    let extras: any = undefined
 
     // Persistir cambios si podemos
     if (savedConversationId && (cmdMode || requestedMode || cmdVoice)) {
@@ -496,20 +519,23 @@ export async function POST(request: Request) {
           model: openai("gpt-4o-mini"),
           system,
           prompt: `Nota elegida: "${article?.title || picked.title}" (${article?.source || picked.source}).
-Contenido disponible:
-${content}
-`,
+  Contenido disponible:
+  ${content}
+
+  Generá un relato claro y con razonamiento: explicá qué pasó, por qué importa, y qué señales hay para el lector. Evitá listas numeradas; usá frases naturales y menciona la fuente exacta al final.`,
           maxTokens: finalMode === "podcast" ? 650 : 260,
         })
 
-        response = result.text
+          response = result.text
+          extras = { spokenResponse: result.text }
       } else {
-        response =
-          `Titular: ${picked.title} — ${picked.source}\n\n` +
-          `Resumen: ${picked.summary || "Sin resumen."}\n\n` +
-          (finalMode === "podcast"
-            ? "¿Seguimos con otro titular o cambiamos de diario/tema?"
-            : "¿Querés más detalle o pasamos al siguiente?")
+          // fallback spoken-friendly
+          const spoken = `Titular: ${picked.title} — ${picked.source}. ${picked.summary || "Sin resumen."}`
+          response = `${picked.title} — ${picked.source}\n\n${picked.summary || "Sin resumen."}\n\n` +
+            (finalMode === "podcast"
+              ? "¿Seguimos con otro titular o cambiamos de diario/tema?"
+              : "¿Querés más detalle o pasamos al siguiente?")
+          extras = { spokenResponse: spoken }
       }
 
       if (savedConversationId && userId) {
@@ -519,12 +545,63 @@ ${content}
         await sql`update conversations set updated_at = now() where id = ${savedConversationId}`
       }
 
-      return sendJsonResponse(response, savedConversationId, { voicePreset: finalVoice, mode: finalMode })
+      return sendJsonResponse(response, savedConversationId, { voicePreset: finalVoice, mode: finalMode, extras })
     }
 
     // D) Listar titulares por importancia
     const headlines = await getHeadlines(sql, topMixed ? null : sources, 7)
 
+    // If no headlines found, start a background search and notify client to play searching sound
+    if (!headlines || headlines.length === 0) {
+      try {
+        const { v4: uuidv4 } = await import('uuid')
+        const searchId = uuidv4()
+        if (sql) {
+          await sql`
+            insert into background_searches (id, query, status)
+            values (${searchId}, ${message}, 'pending')
+          `
+
+          // kick off background search (non-blocking)
+          ;(async () => {
+            try {
+              let summary = null
+              if (process.env.OPENAI_API_KEY) {
+                const { generateText } = await import('ai')
+                const { openai } = await import('@ai-sdk/openai')
+                const res = await generateText({
+                  model: openai('gpt-4o-mini'),
+                  system: buildSystem(finalMode, finalVoice),
+                  prompt: `Busca en internet y resume brevemente la información disponible para: "${message}". Indica fuentes claras y URLs si las encontrás. Si no hay datos, decí 'no encontrado'.`,
+                  maxTokens: 800,
+                })
+                summary = { text: res.text, source: 'web (via OpenAI)'}
+              } else {
+                summary = { text: 'Demo: no hay resultados reales (no hay API key).', source: 'demo' }
+              }
+
+              await sql`
+                update background_searches set status = 'done', result = ${JSON.stringify(summary)} where id = ${searchId}
+              `
+
+              // insert assistant message with found data
+              const assistantText = summary?.text ? `Encontré información en ${summary?.source}: ${summary?.text}` : 'No encontré resultados.'
+              if (savedConversationId) {
+                await sql`insert into messages (conversation_id, role, content) values (${savedConversationId}, 'assistant', ${assistantText})`
+                await sql`update conversations set updated_at = now() where id = ${savedConversationId}`
+              }
+            } catch (e) {
+              console.error('Background search failed', e)
+              try { await sql`update background_searches set status = 'failed' where id = ${searchId}` } catch {}
+            }
+          })()
+        }
+        // return immediate response telling client to play searching sound and poll
+        return sendJsonResponse('Buscando en internet, te aviso cuando tenga resultados.', savedConversationId, { voicePreset: finalVoice, mode: finalMode, extras: { backgroundSearch: true, searchId } })
+      } catch (e) {
+        console.error('Failed to start background search', e)
+      }
+    }
     // Guardar estado para que “la 2” funcione en el siguiente mensaje
     if (savedConversationId) {
       await setConversationStateMerge(sql, savedConversationId, {
@@ -555,7 +632,7 @@ ${content}
           .map((h, i) => `${i + 1}. ${h.title} — ${h.source}\n${String(h.summary || "")}`)
           .join("\n\n")
 
-        const prompt = `Generá un monólogo estilo podcast (voz masculina, formal y atrapante) sobre estos titulares:\n\n${combined}\n\nComenzá nombrando las fuentes y contá las noticias con hilo conductor, priorizando los datos más relevantes. Cerrá con UNA pregunta para seguir.`
+        const prompt = `Generá un monólogo estilo podcast (voz masculina, formal y atrapante) sobre estos titulares:\n\n${combined}\n\nEvita enumerar con números. Sintetizá y razoná por qué cada noticia importa para el oyente: contexto, impacto y señales a seguir. Conectá las notas entre sí cuando corresponda. Al final, mencioná brevemente las fuentes consultadas y cerrá con UNA pregunta para seguir.`
 
         const result = await generateText({
           model: openai("gpt-4o-mini"),
@@ -563,15 +640,17 @@ ${content}
           prompt,
           maxTokens: 900,
         })
-
         response = result.text
+        extras = { spokenResponse: result.text }
       } else {
         // Fallback demo monólogo
+        const demoSpoken = formatHeadlinesForSpeech(null, headlines.slice(0,5), 5)
         response = headlines
           .slice(0, 5)
           .map((h, i) => `${i + 1}. ${h.title} — ${h.source}\n${h.summary || ""}`)
           .join("\n\n")
         response = `Monólogo (demo):\n\n${response}\n\n¿Desea que profundice alguna de estas notas?`
+        extras = { spokenResponse: `Monólogo demo: ${demoSpoken} ¿Desea que profundice alguna de estas notas?` }
       }
 
       if (savedConversationId && userId) {
@@ -581,7 +660,7 @@ ${content}
         await sql`update conversations set updated_at = now() where id = ${savedConversationId}`
       }
 
-      return sendJsonResponse(response, savedConversationId, { voicePreset: finalVoice, mode: finalMode })
+      return sendJsonResponse(response, savedConversationId, { voicePreset: finalVoice, mode: finalMode, extras })
     }
 
     const intro = formatHeadlinesIntro(topMixed ? null : sources)
