@@ -3,11 +3,11 @@
   "crons": [
     {
       "path": "/api/news/ingest",
-      "schedule": "0 */3 * * *"
+      "schedule": "0 6 * * *"
     },
     {
       "path": "/api/news/ingest?mode=enrich&limit=20",
-      "schedule": "30 */3 * * *"
+      "schedule": "0 7 * * *"
     }
   ]
 }
