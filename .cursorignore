@@ -1,0 +1,23 @@
+# secrets
+.env
+.env.*
+*.pem
+*.key
+
+# build artifacts
+.next
+dist
+build
+out
+coverage
+
+# deps
+node_modules
+
+# logs / misc
+*.log
+.DS_Store
+
+# optional: large local data
+*.sqlite
+*.db

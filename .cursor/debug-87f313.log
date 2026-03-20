@@ -1,0 +1,77 @@
+{"sessionId":"87f313","runId":"9b832ab0-8480-4461-a5fd-74e790e284b8","hypothesisId":"H0","message":"connect start","data":{"isListening":false,"isProcessing":false,"dcReadyState":null},"timestamp":1771946047269}
+{"sessionId":"87f313","runId":"9b832ab0-8480-4461-a5fd-74e790e284b8","hypothesisId":"H1","message":"token minted","data":{"status":200,"keyLen":35},"timestamp":1771946048321}
+{"sessionId":"87f313","runId":"9b832ab0-8480-4461-a5fd-74e790e284b8","hypothesisId":"H4","message":"local SDP ready","data":{"iceGatheringState":"complete","hasCandidates":true,"sdpLen":2877},"timestamp":1771946048672}
+{"sessionId":"87f313","runId":"9b832ab0-8480-4461-a5fd-74e790e284b8","hypothesisId":"H4","message":"calls response","data":{"status":201,"ok":true,"answerLen":1668},"timestamp":1771946050338}
+{"sessionId":"87f313","runId":"9b832ab0-8480-4461-a5fd-74e790e284b8","hypothesisId":"H4","message":"remote audio track","data":{"readyState":"live","streamsLen":1},"timestamp":1771946050344}
+{"sessionId":"87f313","runId":"9b832ab0-8480-4461-a5fd-74e790e284b8","hypothesisId":"H4","message":"setRemoteDescription ok","data":{},"timestamp":1771946050345}
+{"sessionId":"87f313","runId":"9b832ab0-8480-4461-a5fd-74e790e284b8","hypothesisId":"H1","message":"session.created received","data":{},"timestamp":1771946051654}
+{"sessionId":"87f313","runId":"88106a23-f834-422d-9afa-f5b7b59febf4","hypothesisId":"H0","message":"connect start","data":{"isListening":false,"isProcessing":false,"dcReadyState":null},"timestamp":1771946065135}
+{"sessionId":"87f313","runId":"88106a23-f834-422d-9afa-f5b7b59febf4","hypothesisId":"H1","message":"token minted","data":{"status":200,"keyLen":35},"timestamp":1771946065884}
+{"sessionId":"87f313","runId":"88106a23-f834-422d-9afa-f5b7b59febf4","hypothesisId":"H4","message":"local SDP ready","data":{"iceGatheringState":"complete","hasCandidates":true,"sdpLen":2877},"timestamp":1771946066159}
+{"sessionId":"87f313","runId":"88106a23-f834-422d-9afa-f5b7b59febf4","hypothesisId":"H4","message":"calls response","data":{"status":201,"ok":true,"answerLen":1667},"timestamp":1771946067236}
+{"sessionId":"87f313","runId":"88106a23-f834-422d-9afa-f5b7b59febf4","hypothesisId":"H4","message":"remote audio track","data":{"readyState":"live","streamsLen":1},"timestamp":1771946067240}
+{"sessionId":"87f313","runId":"88106a23-f834-422d-9afa-f5b7b59febf4","hypothesisId":"H4","message":"setRemoteDescription ok","data":{},"timestamp":1771946067241}
+{"sessionId":"87f313","runId":"88106a23-f834-422d-9afa-f5b7b59febf4","hypothesisId":"H1","message":"session.created received","data":{},"timestamp":1771946068573}
+{"sessionId":"87f313","runId":"03ea4616-8588-45ed-b213-d6b5b7594649","hypothesisId":"H0","message":"connect start","data":{"isListening":false,"isProcessing":false,"dcReadyState":null},"timestamp":1771946088042}
+{"sessionId":"87f313","runId":"03ea4616-8588-45ed-b213-d6b5b7594649","hypothesisId":"H1","message":"token minted","data":{"status":200,"keyLen":35},"timestamp":1771946089114}
+{"sessionId":"87f313","runId":"03ea4616-8588-45ed-b213-d6b5b7594649","hypothesisId":"H4","message":"local SDP ready","data":{"iceGatheringState":"complete","hasCandidates":true,"sdpLen":2877},"timestamp":1771946089721}
+{"sessionId":"87f313","runId":"03ea4616-8588-45ed-b213-d6b5b7594649","hypothesisId":"H4","message":"calls response","data":{"status":201,"ok":true,"answerLen":1668},"timestamp":1771946090034}
+{"sessionId":"87f313","runId":"03ea4616-8588-45ed-b213-d6b5b7594649","hypothesisId":"H4","message":"remote audio track","data":{"readyState":"live","streamsLen":1},"timestamp":1771946090038}
+{"sessionId":"87f313","runId":"03ea4616-8588-45ed-b213-d6b5b7594649","hypothesisId":"H4","message":"setRemoteDescription ok","data":{},"timestamp":1771946090040}
+{"sessionId":"87f313","runId":"03ea4616-8588-45ed-b213-d6b5b7594649","hypothesisId":"H1","message":"session.created received","data":{},"timestamp":1771946091354}
+{"sessionId":"87f313","runId":"694d95c7-f744-4335-ab47-4796314cf91b","hypothesisId":"H0","message":"connect start","data":{"isListening":false,"isProcessing":false,"dcReadyState":null},"timestamp":1771946588461}
+{"sessionId":"87f313","runId":"694d95c7-f744-4335-ab47-4796314cf91b","hypothesisId":"H1","message":"token minted","data":{"status":200,"keyLen":35},"timestamp":1771946589092}
+{"sessionId":"87f313","runId":"694d95c7-f744-4335-ab47-4796314cf91b","hypothesisId":"H4","message":"local SDP ready","data":{"iceGatheringState":"complete","hasCandidates":true,"sdpLen":2869},"timestamp":1771946589343}
+{"sessionId":"87f313","runId":"694d95c7-f744-4335-ab47-4796314cf91b","hypothesisId":"H4","message":"calls response","data":{"status":201,"ok":true,"answerLen":1668},"timestamp":1771946590767}
+{"sessionId":"87f313","runId":"694d95c7-f744-4335-ab47-4796314cf91b","hypothesisId":"H4","message":"remote audio track","data":{"readyState":"live","streamsLen":1},"timestamp":1771946590772}
+{"sessionId":"87f313","runId":"694d95c7-f744-4335-ab47-4796314cf91b","hypothesisId":"H4","message":"setRemoteDescription ok","data":{},"timestamp":1771946590773}
+{"sessionId":"87f313","runId":"694d95c7-f744-4335-ab47-4796314cf91b","hypothesisId":"H1","message":"session.created received","data":{},"timestamp":1771946592083}
+{"sessionId":"87f313","runId":"e70eb930-fd45-4ef6-92ba-1ca6164bd859","hypothesisId":"H0","message":"connect start","data":{"isListening":false,"isProcessing":false,"dcReadyState":null},"timestamp":1771946729842}
+{"sessionId":"87f313","runId":"e70eb930-fd45-4ef6-92ba-1ca6164bd859","hypothesisId":"H1","message":"token minted","data":{"status":200,"keyLen":35},"timestamp":1771946730709}
+{"sessionId":"87f313","runId":"e70eb930-fd45-4ef6-92ba-1ca6164bd859","hypothesisId":"H4","message":"local SDP ready","data":{"iceGatheringState":"complete","hasCandidates":true,"sdpLen":2873},"timestamp":1771946730956}
+{"sessionId":"87f313","runId":"e70eb930-fd45-4ef6-92ba-1ca6164bd859","hypothesisId":"H4","message":"calls response","data":{"status":201,"ok":true,"answerLen":1660},"timestamp":1771946731466}
+{"sessionId":"87f313","runId":"e70eb930-fd45-4ef6-92ba-1ca6164bd859","hypothesisId":"H4","message":"remote audio track","data":{"readyState":"live","streamsLen":1},"timestamp":1771946731471}
+{"sessionId":"87f313","runId":"e70eb930-fd45-4ef6-92ba-1ca6164bd859","hypothesisId":"H4","message":"setRemoteDescription ok","data":{},"timestamp":1771946731473}
+{"sessionId":"87f313","runId":"e70eb930-fd45-4ef6-92ba-1ca6164bd859","hypothesisId":"H1","message":"session.created received","data":{},"timestamp":1771946732611}
+{"sessionId":"87f313","runId":"96ca64c8-2c3c-4724-8d0b-c683fee649bd","hypothesisId":"H0","message":"connect start","data":{"isListening":false,"isProcessing":false,"dcReadyState":null},"timestamp":1771946994808}
+{"sessionId":"87f313","runId":"96ca64c8-2c3c-4724-8d0b-c683fee649bd","hypothesisId":"H1","message":"token minted","data":{"status":200,"keyLen":35},"timestamp":1771946995868}
+{"sessionId":"87f313","runId":"96ca64c8-2c3c-4724-8d0b-c683fee649bd","hypothesisId":"H4","message":"local SDP ready","data":{"iceGatheringState":"complete","hasCandidates":true,"sdpLen":2876},"timestamp":1771946996130}
+{"sessionId":"87f313","runId":"96ca64c8-2c3c-4724-8d0b-c683fee649bd","hypothesisId":"H4","message":"calls response","data":{"status":201,"ok":true,"answerLen":1668},"timestamp":1771946996967}
+{"sessionId":"87f313","runId":"96ca64c8-2c3c-4724-8d0b-c683fee649bd","hypothesisId":"H4","message":"remote audio track","data":{"readyState":"live","streamsLen":1},"timestamp":1771946996972}
+{"sessionId":"87f313","runId":"96ca64c8-2c3c-4724-8d0b-c683fee649bd","hypothesisId":"H4","message":"setRemoteDescription ok","data":{},"timestamp":1771946996974}
+{"sessionId":"87f313","runId":"96ca64c8-2c3c-4724-8d0b-c683fee649bd","hypothesisId":"H1","message":"session.created received","data":{},"timestamp":1771947006484}
+{"sessionId":"87f313","runId":"b86a97d5-4155-4eb1-9542-e7851480dbf8","hypothesisId":"H0","message":"connect start","data":{"isListening":false,"isProcessing":false,"dcReadyState":null},"timestamp":1771947128602}
+{"sessionId":"87f313","runId":"b86a97d5-4155-4eb1-9542-e7851480dbf8","hypothesisId":"H1","message":"token minted","data":{"status":200,"keyLen":35},"timestamp":1771947129361}
+{"sessionId":"87f313","runId":"b86a97d5-4155-4eb1-9542-e7851480dbf8","hypothesisId":"H4","message":"local SDP ready","data":{"iceGatheringState":"complete","hasCandidates":true,"sdpLen":2875},"timestamp":1771947129616}
+{"sessionId":"87f313","runId":"b86a97d5-4155-4eb1-9542-e7851480dbf8","hypothesisId":"H4","message":"calls response","data":{"status":201,"ok":true,"answerLen":1668},"timestamp":1771947130654}
+{"sessionId":"87f313","runId":"b86a97d5-4155-4eb1-9542-e7851480dbf8","hypothesisId":"H4","message":"remote audio track","data":{"readyState":"live","streamsLen":1},"timestamp":1771947130657}
+{"sessionId":"87f313","runId":"b86a97d5-4155-4eb1-9542-e7851480dbf8","hypothesisId":"H4","message":"setRemoteDescription ok","data":{},"timestamp":1771947130659}
+{"sessionId":"87f313","runId":"b86a97d5-4155-4eb1-9542-e7851480dbf8","hypothesisId":"H1","message":"session.created received","data":{},"timestamp":1771947134003}
+{"sessionId":"87f313","runId":"5bfe93a4-da42-4936-9c66-4e2a8b0d6578","hypothesisId":"H0","message":"connect start","data":{"isListening":false,"isProcessing":false,"dcReadyState":null},"timestamp":1771947146776}
+{"sessionId":"87f313","runId":"5bfe93a4-da42-4936-9c66-4e2a8b0d6578","hypothesisId":"H1","message":"token minted","data":{"status":200,"keyLen":35},"timestamp":1771947147213}
+{"sessionId":"87f313","runId":"5bfe93a4-da42-4936-9c66-4e2a8b0d6578","hypothesisId":"H4","message":"local SDP ready","data":{"iceGatheringState":"complete","hasCandidates":true,"sdpLen":2869},"timestamp":1771947147507}
+{"sessionId":"87f313","runId":"5bfe93a4-da42-4936-9c66-4e2a8b0d6578","hypothesisId":"H4","message":"calls response","data":{"status":201,"ok":true,"answerLen":1668},"timestamp":1771947148784}
+{"sessionId":"87f313","runId":"5bfe93a4-da42-4936-9c66-4e2a8b0d6578","hypothesisId":"H4","message":"remote audio track","data":{"readyState":"live","streamsLen":1},"timestamp":1771947148788}
+{"sessionId":"87f313","runId":"5bfe93a4-da42-4936-9c66-4e2a8b0d6578","hypothesisId":"H4","message":"setRemoteDescription ok","data":{},"timestamp":1771947148790}
+{"sessionId":"87f313","runId":"5bfe93a4-da42-4936-9c66-4e2a8b0d6578","hypothesisId":"H1","message":"session.created received","data":{},"timestamp":1771947149874}
+{"sessionId":"87f313","runId":"daef71b4-5308-44cd-a2bf-2ebe33ac6c62","hypothesisId":"H0","message":"connect start","data":{"isListening":false,"isProcessing":false,"dcReadyState":null},"timestamp":1771947172122}
+{"sessionId":"87f313","runId":"daef71b4-5308-44cd-a2bf-2ebe33ac6c62","hypothesisId":"H1","message":"token minted","data":{"status":200,"keyLen":35},"timestamp":1771947172838}
+{"sessionId":"87f313","runId":"daef71b4-5308-44cd-a2bf-2ebe33ac6c62","hypothesisId":"H4","message":"local SDP ready","data":{"iceGatheringState":"complete","hasCandidates":true,"sdpLen":2873},"timestamp":1771947173241}
+{"sessionId":"87f313","runId":"daef71b4-5308-44cd-a2bf-2ebe33ac6c62","hypothesisId":"H4","message":"calls response","data":{"status":201,"ok":true,"answerLen":1668},"timestamp":1771947173532}
+{"sessionId":"87f313","runId":"daef71b4-5308-44cd-a2bf-2ebe33ac6c62","hypothesisId":"H4","message":"remote audio track","data":{"readyState":"live","streamsLen":1},"timestamp":1771947173542}
+{"sessionId":"87f313","runId":"daef71b4-5308-44cd-a2bf-2ebe33ac6c62","hypothesisId":"H4","message":"setRemoteDescription ok","data":{},"timestamp":1771947173544}
+{"sessionId":"87f313","runId":"daef71b4-5308-44cd-a2bf-2ebe33ac6c62","hypothesisId":"H1","message":"session.created received","data":{},"timestamp":1771947174838}
+{"sessionId":"87f313","runId":"c56b2395-5a21-494c-8921-53cca1e8a438","hypothesisId":"H0","message":"connect start","data":{"isListening":false,"isProcessing":false,"dcReadyState":null},"timestamp":1771947320069}
+{"sessionId":"87f313","runId":"c56b2395-5a21-494c-8921-53cca1e8a438","hypothesisId":"H1","message":"token minted","data":{"status":200,"keyLen":35},"timestamp":1771947320751}
+{"sessionId":"87f313","runId":"c56b2395-5a21-494c-8921-53cca1e8a438","hypothesisId":"H4","message":"local SDP ready","data":{"iceGatheringState":"complete","hasCandidates":true,"sdpLen":2871},"timestamp":1771947321022}
+{"sessionId":"87f313","runId":"c56b2395-5a21-494c-8921-53cca1e8a438","hypothesisId":"H4","message":"calls response","data":{"status":201,"ok":true,"answerLen":1668},"timestamp":1771947321932}
+{"sessionId":"87f313","runId":"c56b2395-5a21-494c-8921-53cca1e8a438","hypothesisId":"H4","message":"remote audio track","data":{"readyState":"live","streamsLen":1},"timestamp":1771947321947}
+{"sessionId":"87f313","runId":"c56b2395-5a21-494c-8921-53cca1e8a438","hypothesisId":"H4","message":"setRemoteDescription ok","data":{},"timestamp":1771947321949}
+{"sessionId":"87f313","runId":"c56b2395-5a21-494c-8921-53cca1e8a438","hypothesisId":"H1","message":"session.created received","data":{},"timestamp":1771947323253}
+{"sessionId":"87f313","runId":"bb36f480-7b8d-4089-aeb6-e83c6aa707d0","hypothesisId":"H0","message":"connect start","data":{"isListening":false,"isProcessing":false,"dcReadyState":null},"timestamp":1771947430356}
+{"sessionId":"87f313","runId":"bb36f480-7b8d-4089-aeb6-e83c6aa707d0","hypothesisId":"H1","message":"token minted","data":{"status":200,"keyLen":35},"timestamp":1771947430951}
+{"sessionId":"87f313","runId":"bb36f480-7b8d-4089-aeb6-e83c6aa707d0","hypothesisId":"H4","message":"local SDP ready","data":{"iceGatheringState":"complete","hasCandidates":true,"sdpLen":2872},"timestamp":1771947431230}
+{"sessionId":"87f313","runId":"bb36f480-7b8d-4089-aeb6-e83c6aa707d0","hypothesisId":"H4","message":"calls response","data":{"status":201,"ok":true,"answerLen":1668},"timestamp":1771947432073}
+{"sessionId":"87f313","runId":"bb36f480-7b8d-4089-aeb6-e83c6aa707d0","hypothesisId":"H4","message":"remote audio track","data":{"readyState":"live","streamsLen":1},"timestamp":1771947432077}
+{"sessionId":"87f313","runId":"bb36f480-7b8d-4089-aeb6-e83c6aa707d0","hypothesisId":"H4","message":"setRemoteDescription ok","data":{},"timestamp":1771947432079}
+{"sessionId":"87f313","runId":"bb36f480-7b8d-4089-aeb6-e83c6aa707d0","hypothesisId":"H1","message":"session.created received","data":{},"timestamp":1771947433887}
