@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { useSearchParams } from "next/navigation"
 import Header from "./Header"
 import Orb from "./Orb"
 import TranscriptDrawer from "./TranscriptDrawer"
@@ -53,6 +54,8 @@ function MicIcon({ muted }: { muted: boolean }) {
 }
 
 export default function DashboardClient() {
+  const searchParams = useSearchParams()
+  const showDebug = searchParams.get("debug") === "1"
   const { user, setUser, activeMode, setActiveMode, voicePreset, voiceSpeed, router } = useVoyceAuthAndSettings()
 
   const { headlinesCacheRef, headlinesReadyRef } = useHeadlinesPrefetch(30)
@@ -132,6 +135,15 @@ export default function DashboardClient() {
           </div>
 
           {/* ✅ BLOQUE INFERIOR “anclado” (no empuja la orbe) */}
+          {isLive && realtime.userTranscript && (
+            <div className="absolute left-1/2 -translate-x-1/2 top-[calc(50%+120px)] w-full max-w-xl px-6">
+              <p className="text-center text-sm text-cyan-400/90">
+                <span className="font-medium">Lo que decís:</span>{" "}
+                <span className="text-white/90">{realtime.userTranscript}</span>
+              </p>
+            </div>
+          )}
+
           <div className="absolute left-1/2 -translate-x-1/2 bottom-8 w-full max-w-3xl px-6">
             {/* Mute (solo cuando hay sesión) + botón transcripción (siempre visible) */}
             <div className="flex flex-col items-center gap-5">
@@ -173,6 +185,51 @@ export default function DashboardClient() {
           </div>
         </div>
       </main>
+
+      {showDebug && (
+        <div className="fixed bottom-4 left-4 right-4 max-h-56 overflow-auto rounded-lg bg-black/90 text-xs font-mono p-3 text-green-400 border border-white/20 z-50">
+          <div className="font-bold text-white mb-2 flex flex-col gap-1.5">
+            Debug: mic + flujo
+            {realtime.isListening && (
+              <span className="font-normal text-cyan-400">
+                <strong className="text-white">Tu transcripción:</strong>{" "}
+                {realtime.userTranscript || (
+                  <span className="text-white/50">(esperando... hablá al mic)</span>
+                )}
+              </span>
+            )}
+            {realtime.isListening && (
+              <span className="flex items-center gap-2 font-normal text-cyan-400">
+                Mic:
+                <span className="inline-block w-24 h-2 bg-white/20 rounded-full overflow-hidden">
+                  <span
+                    className="block h-full bg-cyan-400 rounded-full transition-all duration-75"
+                    style={{ width: `${Math.min(100, realtime.micLevel)}%` }}
+                  />
+                </span>
+                {realtime.micLevel}%
+              </span>
+            )}
+          </div>
+          {realtime.debugLog.length === 0 ? (
+            <div className="text-white/40 py-2">Conectate y hablá: verás la barra de mic y las transcripciones YO (mic): e IA:</div>
+          ) : (
+          realtime.debugLog.map((e, i) => (
+            <div key={i} className="py-0.5">
+              <span className="text-white/60">{new Date(e.t).toISOString().slice(11, 23)}</span>{" "}
+              <span className={e.label.startsWith("YO") ? "text-cyan-400" : e.label.startsWith("IA:") ? "text-amber-400" : ""}>
+                {e.label}
+              </span>{" "}
+              {e.text ? `"${(e as { text?: string }).text}"` : ""}
+              {Object.entries(e)
+                .filter(([k]) => !["t", "label", "text"].includes(k))
+                .map(([k, v]) => ` ${k}=${v}`)
+                .join("")}
+            </div>
+          ))
+          )}
+        </div>
+      )}
 
       <style jsx global>{`
         @keyframes pulse {

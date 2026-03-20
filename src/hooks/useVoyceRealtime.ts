@@ -1,11 +1,26 @@
 "use client"
 
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { Mode, VoicePreset } from "@/lib/voyce/types"
 import { presetToVoice, safeSpeed } from "@/lib/voyce/voice"
-import { buildSystem } from "@/lib/voyce/instructions"
+import { buildRealtimeInstructions } from "@/lib/voyce/instructions"
 import { byImportanceDesc, formatList, listForSource } from "@/lib/voyce/headlines"
 import { guessSourceFromTranscript, wantsChangeSource, wantsTopWithoutSource, wantsRefresh, extractPick } from "@/lib/voyce/intents"
+
+function waitForIceGatheringComplete(pc: RTCPeerConnection, timeoutMs = 4000) {
+  if (pc.iceGatheringState === "complete") return Promise.resolve()
+  return new Promise<void>((resolve) => {
+    const t = window.setTimeout(resolve, timeoutMs)
+    const onChange = () => {
+      if (pc.iceGatheringState === "complete") {
+        window.clearTimeout(t)
+        pc.removeEventListener("icegatheringstatechange", onChange)
+        resolve()
+      }
+    }
+    pc.addEventListener("icegatheringstatechange", onChange)
+  })
+}
 
 type UseVoyceRealtimeArgs = {
   activeMode: Mode
@@ -26,9 +41,81 @@ export function useVoyceRealtime({
   const [isProcessing, setIsProcessing] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [currentText, setCurrentText] = useState("")
+  const [userTranscript, setUserTranscript] = useState("")
 
   // ✅ Mute state (sin cortar WebRTC)
   const [isMuted, setIsMuted] = useState(false)
+  const [debugLog, setDebugLog] = useState<Array<{ t: number; label: string; [k: string]: unknown }>>([])
+  const [micLevel, setMicLevel] = useState(0)
+
+  const pushDebug = (label: string, data?: Record<string, unknown>) => {
+    const entry = { t: Date.now(), label, ...(data ?? {}) }
+    setDebugLog((prev) => [...prev.slice(-49), entry])
+  }
+
+  // Fallback: Web Speech API para mostrar transcripción cuando la API de OpenAI no la envía
+  const isListeningRef = useRef(isListening)
+  isListeningRef.current = isListening
+  useEffect(() => {
+    if (!isListening) return
+    const SpeechRecognitionAPI = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    if (!SpeechRecognitionAPI) return
+
+    const rec = new SpeechRecognitionAPI()
+    rec.continuous = true
+    rec.interimResults = true
+    rec.lang = "es-AR"
+
+    rec.onresult = (e: any) => {
+      let text = ""
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const res = e.results[i]
+        if (res?.isFinal) text += res[0]?.transcript ?? ""
+      }
+      if (text.trim()) setUserTranscript((prev) => (prev ? prev + " " + text : text))
+    }
+
+    rec.onend = () => {
+      if (isListeningRef.current) try { rec.start() } catch {}
+    }
+    rec.start()
+
+    return () => {
+      try { rec.abort() } catch {}
+    }
+  }, [isListening])
+
+  // Mic level para debug: muestra que el mic está captando
+  useEffect(() => {
+    if (!isListening || !micStreamRef.current) {
+      setMicLevel(0)
+      return
+    }
+    const stream = micStreamRef.current
+    const AudioCtx = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext
+    const ctx = new AudioCtx()
+    const analyser = ctx.createAnalyser()
+    analyser.fftSize = 256
+    const source = ctx.createMediaStreamSource(stream)
+    source.connect(analyser)
+    const data = new Uint8Array(analyser.frequencyBinCount)
+
+    let rafId: number
+    const tick = () => {
+      analyser.getByteFrequencyData(data)
+      const sum = data.reduce((a, b) => a + b, 0)
+      const avg = sum / data.length
+      setMicLevel(Math.min(100, Math.round(avg * 2)))
+      rafId = requestAnimationFrame(tick)
+    }
+    rafId = requestAnimationFrame(tick)
+
+    return () => {
+      cancelAnimationFrame(rafId)
+      ctx.close()
+      setMicLevel(0)
+    }
+  }, [isListening])
 
   // Realtime refs
   const pcRef = useRef<RTCPeerConnection | null>(null)
@@ -62,10 +149,9 @@ export function useVoyceRealtime({
 
   const requestResponse = (instructions?: string) => {
     setIsSpeaking(true)
-    sendEvent({
-      type: "response.create",
-      response: { modalities: ["audio", "text"], instructions },
-    })
+    const payload: Record<string, unknown> = { type: "response.create" }
+    if (instructions?.trim()) payload.response = { instructions }
+    sendEvent(payload)
   }
 
   const ensureMic = async () => {
@@ -143,6 +229,7 @@ export function useVoyceRealtime({
     setIsProcessing(true)
     setCurrentText("")
     setIsSpeaking(false)
+    pushDebug("connect start")
 
     try {
       const voice = presetToVoice(voicePreset)
@@ -155,43 +242,66 @@ export function useVoyceRealtime({
         { cache: "no-store" }
       )
       const tokenData = await tokenResp.json()
-      const EPHEMERAL_KEY = tokenData?.value
+      const EPHEMERAL_KEY = tokenData?.value ?? tokenData?.client_secret?.value
       if (!EPHEMERAL_KEY) throw new Error("No ephemeral key returned from /api/realtime/token")
 
-      const pc = new RTCPeerConnection()
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] })
       pcRef.current = pc
+
+      pc.oniceconnectionstatechange = () => console.log("[webrtc] ice", pc.iceConnectionState)
+      pc.onconnectionstatechange = () => console.log("[webrtc] pc", pc.connectionState)
 
       const audioEl = document.createElement("audio")
       audioEl.autoplay = true
+      audioEl.setAttribute("playsinline", "true")
+      document.body.appendChild(audioEl)
       remoteAudioElRef.current = audioEl
+
       pc.ontrack = (e) => {
-        audioEl.srcObject = e.streams[0]
+        pushDebug("ontrack", { kind: e.track.kind, streamsLen: e.streams?.length ?? 0 })
+        const remoteStream = e.streams?.[0] ?? new MediaStream([e.track])
+        if (!remoteStream || remoteStream.getAudioTracks().length === 0) return
+        audioEl.autoplay = true
+        audioEl.muted = false
+        audioEl.srcObject = remoteStream
+        audioEl.play()
+          .then(() => pushDebug("audio playing"))
+          .catch((err) => pushDebug("audio play blocked", { err: String(err) }))
       }
 
-      const ms = await ensureMic()
-      ms.getTracks().forEach((t) => pc.addTrack(t))
+      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      micStreamRef.current = micStream
+      micTrackRef.current = micStream.getAudioTracks()[0] ?? null
+      for (const track of micStream.getAudioTracks()) pc.addTrack(track, micStream)
 
       const dc = pc.createDataChannel("oai-events")
       dcRef.current = dc
 
       dc.onopen = async () => {
+        pushDebug("dc open")
         setIsListening(true)
         setIsProcessing(false)
         connectingRef.current = false
         chosenSourceRef.current = null
 
         // Send a detailed system prompt so the realtime model speaks as VOYCE
-        const instructionsText = buildSystem(activeMode as any, (voicePreset as any) || "radio_pro")
+        const instructionsText = buildRealtimeInstructions(activeMode as any, (voicePreset as any) || "radio_pro")
         if (process.env.NODE_ENV === 'development') console.debug('Realtime: sending system instructions:', instructionsText.slice(0,600))
+
+        const sessionPayload = {
+          type: "realtime",
+          turn_detection: { type: "server_vad" },
+          instructions: instructionsText,
+          input_audio_transcription: { model: "whisper-1" },
+          audio: {
+            input: { transcription: { model: "whisper-1", language: "es" } },
+            output: { voice, speed },
+          },
+        }
+
         sendEvent({
           type: "session.update",
-          session: {
-            type: "realtime",
-            turn_detection: { type: "server_vad" },
-            input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
-            instructions: instructionsText,
-            audio: { output: { voice, speed } },
-          },
+          session: sessionPayload,
         })
 
         // ✅ Si ya estaba muteado, aplicamos silencio sin cortar la sesión
@@ -231,17 +341,48 @@ export function useVoyceRealtime({
       dc.onmessage = async (msg) => {
         try {
           const evt = JSON.parse(msg.data)
+          const evtType = evt?.type ?? ""
 
-          if (evt?.type?.includes("response.completed") || evt?.type?.includes("response.done")) {
+          if (evtType.includes("input_audio_buffer")) {
+            pushDebug("VAD/buffer", { type: evtType })
+          }
+          if (evtType.includes("transcription") || evtType.includes("input_audio_transcription")) {
+            pushDebug("evt transcription", { type: evtType, hasTranscript: !!evt?.transcript, hasDelta: !!evt?.delta })
+          }
+          if (evtType === "session.updated") {
+            pushDebug("session.updated", { hasInputTranscription: !!(evt?.session?.input_audio_transcription || evt?.session?.audio?.input?.transcription) })
+          }
+          if (evtType === "error" || evt?.error) {
+            pushDebug("API error", { type: evtType, error: evt?.error })
+          }
+
+          if (evtType.includes("response.completed") || evtType.includes("response.done")) {
             setIsSpeaking(false)
           }
 
+          const transcriptFromItem = evt?.item?.content?.find?.((c: any) => c.type === "input_audio")?.transcript
           const transcript =
-            evt?.transcript && typeof evt.transcript === "string" && evt.transcript.trim()
-              ? evt.transcript.trim()
+            (evt?.transcript && typeof evt.transcript === "string" && evt.transcript.trim()) ||
+            (transcriptFromItem && typeof transcriptFromItem === "string" && transcriptFromItem.trim())
+              ? (evt?.transcript?.trim?.() || transcriptFromItem?.trim?.())
               : ""
 
-          if (transcript) setCurrentText(transcript)
+          const delta = evt?.delta && typeof evt.delta === "string" ? evt.delta.trim() : ""
+
+          if (evt?.type?.includes("input_audio_transcription") || (evt?.type === "conversation.item.created" && evt?.item?.role === "user" && transcriptFromItem)) {
+            const text = transcript || delta
+            if (text) {
+              pushDebug("YO (mic):", { text })
+              if (evt?.type?.includes(".completed") || transcript) setUserTranscript(text)
+              else if (delta) setUserTranscript((prev) => prev + delta)
+              setCurrentText(text)
+            }
+          }
+          if (evt?.type?.includes("audio_transcript") && transcript && !evt?.type?.includes("input_audio")) {
+            pushDebug("IA:", { text: transcript })
+            setCurrentText(transcript)
+          }
+          if (transcript && !evt?.type?.includes("input_audio_transcription")) setCurrentText(transcript)
           if (!transcript) return
 
           if (wantsChangeSource(transcript)) {
@@ -336,10 +477,14 @@ export function useVoyceRealtime({
 
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)
+      await waitForIceGatheringComplete(pc)
+
+      const localSdp = pc.localDescription?.sdp
+      if (!localSdp) throw new Error("Missing local SDP")
 
       const sdpResp = await fetch("https://api.openai.com/v1/realtime/calls", {
         method: "POST",
-        body: offer.sdp,
+        body: localSdp,
         headers: {
           Authorization: `Bearer ${EPHEMERAL_KEY}`,
           "Content-Type": "application/sdp",
@@ -351,6 +496,7 @@ export function useVoyceRealtime({
       const answerSdp = await sdpResp.text()
       await pc.setRemoteDescription({ type: "answer", sdp: answerSdp })
     } catch (e) {
+      pushDebug("connect error", { err: String(e) })
       console.error(e)
       connectingRef.current = false
       setIsProcessing(false)
@@ -364,12 +510,21 @@ export function useVoyceRealtime({
       dcRef.current?.close()
       pcRef.current?.close()
     } catch {}
-
+    try {
+      micStreamRef.current?.getTracks().forEach((t) => t.stop())
+    } catch {}
+    micStreamRef.current = null
+    micTrackRef.current = null
+    const audioEl = remoteAudioElRef.current
+    if (audioEl) {
+      audioEl.srcObject = null
+      if (audioEl.parentNode) audioEl.parentNode.removeChild(audioEl)
+    }
+    remoteAudioElRef.current = null
     dcRef.current = null
     pcRef.current = null
-    remoteAudioElRef.current = null
 
-    // ✅ limpieza mute/silence
+    // limpieza mute/silence
     try {
       silentTrackRef.current?.stop()
     } catch {}
@@ -384,6 +539,7 @@ export function useVoyceRealtime({
     setIsListening(false)
     setIsSpeaking(false)
     setCurrentText("")
+    setUserTranscript("")
   }
 
   const toggleListening = () => {
@@ -400,11 +556,13 @@ export function useVoyceRealtime({
     isSpeaking,
     currentText,
     setCurrentText,
+    userTranscript,
     toggleListening,
     disconnectRealtime,
 
-    // ✅ mute api
     isMuted,
     toggleMute,
+    debugLog,
+    micLevel,
   }
 }

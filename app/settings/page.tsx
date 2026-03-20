@@ -8,12 +8,15 @@ const getUser = () => {
   return raw ? JSON.parse(raw) : null
 }
 
+type InterestId = "economia" | "politica" | "politica_global" | "deportes" | "tecnologia" | "salud"
+
 interface UserSettings {
   voiceSpeed: number
   preferredMode: "conversacion" | "podcast"
   autoListen: boolean
   darkMode: boolean
   voicePreset?: "radio_pro" | "radio_canchero" | "podcast_story"
+  interests: InterestId[]
 }
 
 const ArrowLeftIcon = () => (
@@ -22,6 +25,13 @@ const ArrowLeftIcon = () => (
     <polyline points="12 19 5 12 12 5" />
   </svg>
 )
+
+const VALID_INTERESTS: InterestId[] = ["economia", "politica", "politica_global", "deportes", "tecnologia", "salud"]
+
+function normalizeInterests(raw: any): InterestId[] {
+  if (!Array.isArray(raw)) return []
+  return raw.filter((x): x is InterestId => VALID_INTERESTS.includes(x as InterestId))
+}
 
 function normalizeSettings(input: any): UserSettings {
   const voiceSpeedRaw = Number(input?.voiceSpeed ?? input?.voice_speed ?? 1)
@@ -38,7 +48,9 @@ function normalizeSettings(input: any): UserSettings {
   const voicePreset: UserSettings["voicePreset"] =
     vpRaw === "radio_canchero" ? "radio_canchero" : vpRaw === "podcast_story" ? "podcast_story" : "radio_pro"
 
-  return { voiceSpeed, preferredMode, autoListen, darkMode, voicePreset }
+  const interests = normalizeInterests(input?.interests)
+
+  return { voiceSpeed, preferredMode, autoListen, darkMode, voicePreset, interests }
 }
 
 export default function SettingsPage() {
@@ -50,6 +62,7 @@ export default function SettingsPage() {
     autoListen: true,
     darkMode: true,
     voicePreset: "radio_pro",
+    interests: [],
   })
   const [isSaving, setIsSaving] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
@@ -92,6 +105,7 @@ export default function SettingsPage() {
       autoListen: settings.autoListen,
       darkMode: settings.darkMode,
       voicePreset: settings.voicePreset ?? "radio_pro",
+      interests: settings.interests,
     }
 
     try {
@@ -196,6 +210,50 @@ export default function SettingsPage() {
                 </button>
               </div>
             </div>
+          </div>
+
+          <div className="p-6 bg-white/5 border border-white/10 rounded-2xl">
+            <h2 className="text-lg font-semibold mb-1">Intereses</h2>
+            <p className="text-sm text-white/40 mb-4">
+              VOYCE priorizará las noticias de los temas que más te importan.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {([
+                { id: "economia" as InterestId, label: "Economía", emoji: "📈" },
+                { id: "politica" as InterestId, label: "Política", emoji: "🏛️" },
+                { id: "politica_global" as InterestId, label: "Mundo", emoji: "🌍" },
+                { id: "deportes" as InterestId, label: "Deportes", emoji: "⚽" },
+                { id: "tecnologia" as InterestId, label: "Tecnología", emoji: "💻" },
+                { id: "salud" as InterestId, label: "Salud", emoji: "🩺" },
+              ] as Array<{ id: InterestId; label: string; emoji: string }>).map((item) => {
+                const active = settings.interests.includes(item.id)
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => {
+                      const next = active
+                        ? settings.interests.filter((i) => i !== item.id)
+                        : [...settings.interests, item.id]
+                      setSettings({ ...settings, interests: next })
+                    }}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-full border text-sm font-medium transition-all ${
+                      active
+                        ? "border-[#00f0ff] bg-[#00f0ff]/15 text-[#00f0ff]"
+                        : "border-white/15 text-white/60 hover:border-white/30 hover:text-white/80"
+                    }`}
+                  >
+                    <span>{item.emoji}</span>
+                    <span>{item.label}</span>
+                    {active && (
+                      <span className="ml-1 text-xs opacity-70">✓</span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+            {settings.interests.length === 0 && (
+              <p className="mt-3 text-xs text-white/30">Sin filtros — VOYCE ordena solo por importancia editorial.</p>
+            )}
           </div>
 
           <div className="p-6 bg-white/5 border border-white/10 rounded-2xl">

@@ -1,13 +1,9 @@
 import { neon } from "@neondatabase/serverless";
 import { NextResponse } from "next/server";
+import { verifyToken } from "@/lib/auth";
 
 function getUserIdFromToken(token: string): number | null {
-  try {
-    const payload = JSON.parse(decodeURIComponent(escape(atob(token))));
-    return payload.id || null;
-  } catch {
-    return null;
-  }
+  return verifyToken(token);
 }
 
 export async function GET(request: Request) {

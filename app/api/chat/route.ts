@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server"
 import { guessSourceFromTranscript, wantsTopWithoutSource } from '@/lib/voyce/intents'
 import { presetToVoice } from '@/lib/voyce/voice'
+import { verifyToken } from '@/lib/auth'
+import { buildSystem, type UserContext } from '@/lib/voyce/instructions'
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -18,30 +20,7 @@ type TalkMode = "news" | "podcast" // news = conversacional
 function tryGetUserIdFromBearer(authHeader: string | null): number | null {
   if (!authHeader?.startsWith("Bearer ")) return null
   const token = authHeader.slice("Bearer ".length).trim()
-
-  // Try JWT payload decode (base64url) -> { id: number }
-  try {
-    const parts = token.split(".")
-    if (parts.length >= 2) {
-      const payloadB64 = parts[1]
-      const json = Buffer.from(payloadB64, "base64url").toString("utf8")
-      const payload = JSON.parse(json)
-      const id = Number(payload?.id)
-      return Number.isFinite(id) ? id : null
-    }
-  } catch {
-    // ignore
-  }
-
-  // Try plain base64 JSON (legacy)
-  try {
-    const json = Buffer.from(token, "base64").toString("utf8")
-    const payload = JSON.parse(json)
-    const id = Number(payload?.id)
-    return Number.isFinite(id) ? id : null
-  } catch {
-    return null
-  }
+  return verifyToken(token)
 }
 
 // -----------------------------
@@ -125,7 +104,49 @@ async function setConversationStateMerge(sql: any, conversationId: number, patch
 // -----------------------------
 // News queries
 // -----------------------------
-async function getHeadlines(sql: any, sources: string[] | null, limit = 7) {
+
+/**
+ * Keyword patterns per interest. Used to boost effective score in JS after fetch.
+ * Boost: +35 per matched interest. Modest enough not to override true editorial weight,
+ * but enough to surface relevant stories when two articles are close in importance.
+ */
+const INTEREST_PATTERNS: Record<string, RegExp> = {
+  economia: /(dólar|dolar|inflaci[oó]n|fmi|tasas|deuda|reservas|cepo|bcra|pbi|riesgo\s*pa[ií]s|bonos|merval|mercados|tipo\s*de\s*cambio|licitaci[oó]n)/i,
+  politica: /(gobierno|congreso|ley|decreto|regulaci[oó]n|elecciones|presidente|ministerio|gabinete|justicia|corte\s*suprema|senado|diputados|milei|kirchner|oposici[oó]n)/i,
+  politica_global: /(estados\s*unidos|eeuu|trump|china|rusia|europa|otan|nato|g20|fondo\s*monetario|israel|ucrania|guerra|onu|bid|banco\s*mundial|global|internacional)/i,
+  deportes: /(pumas|rugby|f[uú]tbol|boca|river|messi|tenis|selecci[oó]n|mundial|nba|liga|deporte|torneo|copa|campe[oó]n)/i,
+  tecnologia: /(tecnolog[ií]a|inteligencia\s*artificial|\bia\b|apple|google|microsoft|startup|software|crypto|bitcoin|blockchain|openai)/i,
+  salud: /(salud|medicina|vacuna|hospital|covid|c[aá]ncer|enfermedad|tratamiento|estudio\s*m[eé]dico|ministerio\s*de\s*salud|dengue|epidemia)/i,
+}
+
+type HeadlineBaseRow = { importance_score: number | null; title: string; category: string | null }
+
+function applyInterestBoost<T extends HeadlineBaseRow>(
+  rows: T[],
+  interests: string[]
+): Array<T & { _effective_score: number }> {
+  return rows.map((row) => {
+    let boost = 0
+    if (interests.length > 0) {
+      for (const interest of interests) {
+        const pattern = INTEREST_PATTERNS[interest]
+        if (pattern && pattern.test(row.title)) {
+          boost += 35
+        }
+        // also boost economia category match
+        if (interest === "economia" && row.category === "economia") {
+          boost += 15
+        }
+      }
+    }
+    return { ...row, _effective_score: (row.importance_score ?? 0) + boost }
+  })
+}
+
+async function getHeadlines(sql: any, sources: string[] | null, limit = 7, interests: string[] = []) {
+  // Fetch more rows when we have interests, so boosting has room to reorder
+  const fetchLimit = interests.length > 0 ? Math.min(limit * 3, 30) : limit
+
   // últimas 48h para cubrir cortes / diferencias de publicación
   const rows = sources?.length
     ? await sql`
@@ -134,16 +155,17 @@ async function getHeadlines(sql: any, sources: string[] | null, limit = 7) {
         where fetched_at >= current_date - interval '1 day'
           and source = any(${sources}::text[])
         order by coalesce(importance_score, 0) desc, fetched_at desc
-        limit ${limit}
+        limit ${fetchLimit}
       `
     : await sql`
         select id, source, title, summary, category, importance_score, fetched_at
         from news_articles
         where fetched_at >= current_date - interval '1 day'
         order by coalesce(importance_score, 0) desc, fetched_at desc
-        limit ${limit}
+        limit ${fetchLimit}
       `
-  return rows as Array<{
+
+  type HeadlineRow = {
     id: number
     source: string
     title: string
@@ -151,7 +173,12 @@ async function getHeadlines(sql: any, sources: string[] | null, limit = 7) {
     category: string | null
     importance_score: number | null
     fetched_at: string
-  }>
+  }
+
+  const boosted = applyInterestBoost(rows as HeadlineRow[], interests)
+  boosted.sort((a, b) => b._effective_score - a._effective_score)
+
+  return boosted.slice(0, limit)
 }
 
 async function getArticleForPodcast(sql: any, id: number) {
@@ -165,74 +192,31 @@ async function getArticleForPodcast(sql: any, id: number) {
 }
 
 // -----------------------------
-// Voice Prompting
+// User context (para personalizar el system prompt)
 // -----------------------------
-const todayAR = new Intl.DateTimeFormat("es-AR", {
-  timeZone: "America/Argentina/Buenos_Aires",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-}).format(new Date())
-
-const BASE_RULES = `
-Sos VOYCE, locutor argentino. Fecha (Argentina): ${todayAR}.
-Vas directo al grano: sin saludos, sin cháchara, sin opiniones personales.
-Usá SOLO titulares de HOY que vienen de la DB. NO inventes.
-SIEMPRE nombrá la fuente al citar un titular (ej: "1. Titular — La Nación").
-Frases cortas y enfocadas en datos relevantes. Nada de emojis.
-No preguntes ni converses: evitá comentarios tipo "bien, ¿y vos?" o respuestas coloquiales.
-Prioridad temática por impacto: economía > energía/mercados > política (impacto económico) > resto.
-Si el usuario pide información que NO está en la DB: decí exactamente "No lo tengo en los titulares de hoy. Voy a buscar en internet y vuelvo con información 100% actualizada." y finalizá la respuesta breve. Luego el sistema podrá realizar la búsqueda externa si está habilitada.
-`.trim()
-
-const STYLE_RADIO_PRO = `
-Estilo: formal, masculino y atrapante. Voz grave y segura; ritmo que mantiene la atención.
-Sé directo y extremadamente claro: frases cortas, precisión en datos y enfoque en lo relevante.
-Conectores permitidos: "Clave", "El punto es", "Qué mirar", "Vamos con esto".
-`.trim()
-
-const STYLE_RADIO_CANCHERO = `
-Estilo: cercano pero controlado; masculino y con presencia. Menos humor, más concreción.
-Conectores permitidos: "Che, mirá", "Dato", "Ojo con esto", "Para llevar".
-`.trim()
-
-const STYLE_PODCAST_STORY = `
-Estilo: narrativo y envolvente, narrador masculino y formal; estructurado para atrapar al oyente.
-Evitá listas largas; priorizá un hilo claro y datos comprobables.
-Conectores permitidos: "Arranquemos por el principio", "Contexto", "Qué significa", "Cierre".
-`.trim()
-
-function buildSystem(mode: TalkMode, voicePreset: VoicePreset) {
-  const style =
-    voicePreset === "radio_canchero"
-      ? STYLE_RADIO_CANCHERO
-      : voicePreset === "podcast_story"
-        ? STYLE_PODCAST_STORY
-        : STYLE_RADIO_PRO
-
-  if (mode === "podcast") {
-    return `
-${BASE_RULES}
-${style}
-
-MODO PODCAST:
-- Contá la nota con hilo conductor, casi de punta a punta.
-- Estructura obligatoria: (1) Qué pasó, (2) Contexto, (3) Por qué importa, (4) Qué mirar después.
-- Evitá enumerar listas largas. Narrativo, claro.
-- Cerrá con UNA pregunta: "¿Seguimos con otro titular o cambiamos de diario/tema?"
-`.trim()
+async function getUserContext(sql: any, userId: number): Promise<UserContext> {
+  try {
+    const [userRow, settingsRow] = await Promise.all([
+      sql`SELECT name FROM users WHERE id = ${userId} LIMIT 1`,
+      sql`SELECT interests FROM user_settings WHERE user_id = ${userId} LIMIT 1`,
+    ])
+    return {
+      userName: userRow?.[0]?.name ?? undefined,
+      interests: settingsRow?.[0]?.interests ?? [],
+    }
+  } catch {
+    return {}
   }
+}
 
-  return `
-${BASE_RULES}
-${style}
-
-MODO CONVERSACIONAL:
-- Resumí primero en 2-3 frases.
-- Luego agregá 2 datos de contexto como máximo.
-- Cerrá SIEMPRE con una pregunta concreta para seguir.
-- Si el usuario pide “modo podcast”, pasá a MODO PODCAST.
-`.trim()
+/** Calcula el "peso" editorial del día según los importance_scores disponibles */
+function computeNewsWeight(headlines: Array<{ importance_score: number | null }>): UserContext["newsWeight"] {
+  if (!headlines.length) return "normal"
+  const scores = headlines.map((h) => h.importance_score ?? 0)
+  const avg = scores.reduce((a, b) => a + b, 0) / scores.length
+  if (avg >= 60) return "heavy"
+  if (avg <= 20) return "light"
+  return "normal"
 }
 
 // -----------------------------
@@ -261,6 +245,11 @@ function describeVoice(preset: VoicePreset) {
   if (preset === "radio_canchero") return "canchera"
   if (preset === "podcast_story") return "narrativa"
   return "pro"
+}
+
+// TalkMode ("news") → Mode ("conversacion") para buildSystem
+function toMode(m: TalkMode): import("@/lib/voyce/types").Mode {
+  return m === "podcast" ? "podcast" : "conversacion"
 }
 
 // -----------------------------
@@ -388,8 +377,13 @@ export async function POST(request: Request) {
     "radio_pro"
 
   // Guardar en estado de conversación
-  await setConversationStateMerge(sql, savedConversationId, { mode: talkMode, voicePreset })
+  if (savedConversationId != null) {
+    await setConversationStateMerge(sql, savedConversationId, { mode: talkMode, voicePreset })
+  }
 }
+
+    // --- Contexto del usuario (para personalizar el system prompt) ---
+    const userCtx: UserContext = userId ? await getUserContext(sql, userId) : {}
 
     // --- Estado ---
     const state = savedConversationId ? await getConversationState(sql, savedConversationId) : {}
@@ -507,7 +501,7 @@ export async function POST(request: Request) {
           ? String(article.content_full)
           : String(article?.summary || picked.summary || "")
 
-      const system = buildSystem(finalMode, finalVoice)
+      const system = buildSystem(toMode(finalMode), finalVoice, userCtx)
       if (process.env.NODE_ENV === 'development') console.debug('Chat: system prompt (article):', system.slice(0, 600))
 
       let response = ""
@@ -523,7 +517,8 @@ export async function POST(request: Request) {
   ${content}
 
   Generá un relato claro y con razonamiento: explicá qué pasó, por qué importa, y qué señales hay para el lector. Evitá listas numeradas; usá frases naturales y menciona la fuente exacta al final.`,
-          maxTokens: finalMode === "podcast" ? 650 : 260,
+          maxOutputTokens: finalMode === "podcast" ? 650 : 260,
+          temperature: 1.1,
         })
 
           response = result.text
@@ -548,14 +543,13 @@ export async function POST(request: Request) {
       return sendJsonResponse(response, savedConversationId, { voicePreset: finalVoice, mode: finalMode, extras })
     }
 
-    // D) Listar titulares por importancia
-    const headlines = await getHeadlines(sql, topMixed ? null : sources, 7)
+    // D) Listar titulares por importancia (con boost por intereses del usuario)
+    const headlines = await getHeadlines(sql, topMixed ? null : sources, 7, userCtx.interests ?? [])
 
     // If no headlines found, start a background search and notify client to play searching sound
     if (!headlines || headlines.length === 0) {
       try {
-        const { v4: uuidv4 } = await import('uuid')
-        const searchId = uuidv4()
+        const searchId = crypto.randomUUID()
         if (sql) {
           await sql`
             insert into background_searches (id, query, status)
@@ -571,9 +565,10 @@ export async function POST(request: Request) {
                 const { openai } = await import('@ai-sdk/openai')
                 const res = await generateText({
                   model: openai('gpt-4o-mini'),
-                  system: buildSystem(finalMode, finalVoice),
+                  system: buildSystem(toMode(finalMode), finalVoice, userCtx),
                   prompt: `Busca en internet y resume brevemente la información disponible para: "${message}". Indica fuentes claras y URLs si las encontrás. Si no hay datos, decí 'no encontrado'.`,
-                  maxTokens: 800,
+                  maxOutputTokens: 800,
+                  temperature: 1.1,
                 })
                 summary = { text: res.text, source: 'web (via OpenAI)'}
               } else {
@@ -619,8 +614,9 @@ export async function POST(request: Request) {
     // un monólogo tipo podcast que cubra los titulares en vez de la lista breve.
     const userAskedSpecificSource = Boolean(explicitSources?.length || (state?.sources && state.sources.length))
     if (finalMode === "podcast" && (userAskedSpecificSource || topMixed)) {
-      const system = buildSystem(finalMode, finalVoice)
-        if (process.env.NODE_ENV === 'development') console.debug('Chat: system prompt (podcast):', system.slice(0, 600))
+      const ctxWithWeight: UserContext = { ...userCtx, newsWeight: computeNewsWeight(headlines) }
+      const system = buildSystem(toMode(finalMode), finalVoice, ctxWithWeight)
+      if (process.env.NODE_ENV === 'development') console.debug('Chat: system prompt (podcast):', system.slice(0, 600))
 
       let response = ""
       if (process.env.OPENAI_API_KEY) {
@@ -638,7 +634,8 @@ export async function POST(request: Request) {
           model: openai("gpt-4o-mini"),
           system,
           prompt,
-          maxTokens: 900,
+          maxOutputTokens: 900,
+          temperature: 1.1,
         })
         response = result.text
         extras = { spokenResponse: result.text }

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { neon } from "@neondatabase/serverless"
+import { getUserIdFromRequest } from "@/lib/auth"
 
 export const runtime = "nodejs"
 
@@ -33,15 +34,20 @@ function normalizeSpeed(x: any): number {
 
 export async function GET(req: Request) {
   try {
-    const { searchParams } = new URL(req.url)
-    const userId = Number(searchParams.get("userId"))
+    // Primero intentamos obtener userId del token (nuevo flujo)
+    // Si no hay token, aceptamos userId por query param (legacy / compatibilidad)
+    let userId = getUserIdFromRequest(req)
+    if (!userId) {
+      const { searchParams } = new URL(req.url)
+      userId = Number(searchParams.get("userId")) || null
+    }
 
     if (!userId) {
-      return NextResponse.json({ ok: false, error: "missing_userId" }, { status: 400 })
+      return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 })
     }
 
     const rows = await sql`
-      select user_id, voice_speed, preferred_mode, auto_listen, dark_mode, voice_preset
+      select user_id, voice_speed, preferred_mode, auto_listen, dark_mode, voice_preset, interests
       from user_settings
       where user_id = ${userId}
       limit 1
@@ -57,6 +63,7 @@ export async function GET(req: Request) {
           auto_listen: true,
           dark_mode: true,
           voice_preset: "radio_pro",
+          interests: [],
         },
       })
     }
@@ -72,6 +79,7 @@ export async function GET(req: Request) {
         auto_listen: Boolean(s.auto_listen ?? true),
         dark_mode: Boolean(s.dark_mode ?? true),
         voice_preset: normalizeVoicePreset(s.voice_preset),
+        interests: Array.isArray(s.interests) ? s.interests : [],
       },
     })
   } catch (e: any) {
@@ -83,10 +91,16 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const body = await req.json()
-    const userId = Number(body.userId)
+
+    // Primero intentamos obtener userId del token (nuevo flujo)
+    // Si no hay token, aceptamos userId del body (legacy / compatibilidad)
+    let userId = getUserIdFromRequest(req)
+    if (!userId) {
+      userId = Number(body.userId) || null
+    }
 
     if (!userId) {
-      return NextResponse.json({ ok: false, error: "missing_userId" }, { status: 400 })
+      return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 })
     }
 
     const voiceSpeed = normalizeSpeed(body.voiceSpeed ?? body.voice_speed)
@@ -94,10 +108,11 @@ export async function POST(req: Request) {
     const autoListen = Boolean(body.autoListen ?? body.auto_listen ?? true)
     const darkMode = Boolean(body.darkMode ?? body.dark_mode ?? true)
     const voicePreset = normalizeVoicePreset(body.voicePreset ?? body.voice_preset)
+    const interests: string[] = Array.isArray(body.interests) ? body.interests : []
 
     await sql`
       insert into user_settings (
-        user_id, voice_speed, preferred_mode, auto_listen, dark_mode, voice_preset, updated_at
+        user_id, voice_speed, preferred_mode, auto_listen, dark_mode, voice_preset, interests, updated_at
       )
       values (
         ${userId},
@@ -106,6 +121,7 @@ export async function POST(req: Request) {
         ${autoListen},
         ${darkMode},
         ${voicePreset},
+        ${interests},
         now()
       )
       on conflict (user_id)
@@ -115,6 +131,7 @@ export async function POST(req: Request) {
         auto_listen = excluded.auto_listen,
         dark_mode = excluded.dark_mode,
         voice_preset = excluded.voice_preset,
+        interests = excluded.interests,
         updated_at = now()
     `
 

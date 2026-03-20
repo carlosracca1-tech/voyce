@@ -553,7 +553,11 @@ export default function App() {
 
         if (userData.subscription?.canAccess) {
           router.replace("/dashboard")
-          return
+          // Seguimos esperando la navegación; setIsLoading(false) se omite
+          // para mantener el spinner hasta que el router complete el redirect.
+          // Si tarda más de 3s, liberamos el estado para evitar quedarse trabado.
+          const fallback = setTimeout(() => setIsLoading(false), 3000)
+          return () => clearTimeout(fallback)
         }
       } catch {
         localStorage.removeItem("voyce_user")
@@ -569,6 +573,8 @@ export default function App() {
 
     if (userData.subscription?.canAccess) {
       router.replace("/dashboard")
+      // Si el redirect falla o el router tarda, liberamos isLoading como fallback
+      setTimeout(() => setIsLoading(false), 3000)
     }
   }
 

@@ -52,7 +52,7 @@ export async function GET(req: Request) {
     // Build the VOYCE system instructions to include at session creation
     const instructions = buildSystem(mode as any, preset as any)
 
-    // ✅ Realtime: voz/velocidad e instrucciones se setean en session.audio.output.voice/speed
+    // ✅ Realtime: voz/velocidad e instrucciones (transcripción se envía en session.update)
     const sessionConfig = {
       session: {
         type: "realtime",
@@ -79,7 +79,9 @@ export async function GET(req: Request) {
     }
 
     const data = await resp.json()
-    return NextResponse.json({ ...data, debugVoice: voice, debugSpeed: speed, debugMode: mode, debugPreset: preset, debugInstructions: instructions.slice(0, 800) })
+    const value = data?.value ?? data?.client_secret?.value
+    if (!value) return NextResponse.json({ error: "no_value_in_response" }, { status: 500 })
+    return NextResponse.json({ ...data, value })
   } catch (e: any) {
     return NextResponse.json({ error: "internal_error", detail: e?.message ?? String(e) }, { status: 500 })
   }

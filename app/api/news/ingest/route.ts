@@ -3,15 +3,82 @@ import { NextResponse } from "next/server"
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 export const revalidate = 0
+export const maxDuration = 120 // segundos — necesario en Vercel Pro para 45 feeds + enrich
 
-// Fuentes RSS de diarios argentinos
+// Fuentes RSS de diarios argentinos — secciones + fuentes nuevas
+// Los feeds que no responden simplemente devuelven [] (no rompen el flujo)
 const RSS_FEEDS = [
-  { name: "Clarín", url: "https://www.clarin.com/rss/lo-ultimo/", category: "general" },
-  { name: "La Nación", url: "https://www.lanacion.com.ar/arc/outboundfeeds/rss/?outputType=xml", category: "general" },
-  { name: "Infobae", url: "https://www.infobae.com/feeds/rss/", category: "general" },
-  { name: "Página 12", url: "https://www.pagina12.com.ar/rss/portada", category: "general" },
-  { name: "Ámbito", url: "https://www.ambito.com/rss/pages/home.xml", category: "economia" },
-  { name: "El Cronista", url: "https://www.cronista.com/files/rss/cronista.xml", category: "economia" },
+  // ── CLARÍN ────────────────────────────────────────────────────────────────
+  { name: "Clarín",         url: "https://www.clarin.com/rss/lo-ultimo/",    category: "general"  },
+  { name: "Clarín",         url: "https://www.clarin.com/rss/politica/",     category: "politica" },
+  { name: "Clarín",         url: "https://www.clarin.com/rss/economia/",     category: "economia" },
+  { name: "Clarín",         url: "https://www.clarin.com/rss/deportes/",     category: "deportes" },
+  { name: "Clarín",         url: "https://www.clarin.com/rss/mundo/",        category: "mundo"    },
+  { name: "Clarín",         url: "https://www.clarin.com/rss/tecnologia/",   category: "tecnologia" },
+
+  // ── LA NACIÓN ─────────────────────────────────────────────────────────────
+  { name: "La Nación",      url: "https://www.lanacion.com.ar/arc/outboundfeeds/rss/?outputType=xml",                         category: "general"  },
+  { name: "La Nación",      url: "https://www.lanacion.com.ar/arc/outboundfeeds/rss/category/politica/?outputType=xml",       category: "politica" },
+  { name: "La Nación",      url: "https://www.lanacion.com.ar/arc/outboundfeeds/rss/category/economia/?outputType=xml",       category: "economia" },
+  { name: "La Nación",      url: "https://www.lanacion.com.ar/arc/outboundfeeds/rss/category/deportes/?outputType=xml",       category: "deportes" },
+  { name: "La Nación",      url: "https://www.lanacion.com.ar/arc/outboundfeeds/rss/category/el-mundo/?outputType=xml",       category: "mundo"    },
+  { name: "La Nación",      url: "https://www.lanacion.com.ar/arc/outboundfeeds/rss/category/tecnologia/?outputType=xml",     category: "tecnologia" },
+
+  // ── INFOBAE ───────────────────────────────────────────────────────────────
+  { name: "Infobae",        url: "https://www.infobae.com/feeds/rss/",          category: "general"  },
+  { name: "Infobae",        url: "https://www.infobae.com/feeds/rss/politica/", category: "politica" },
+  { name: "Infobae",        url: "https://www.infobae.com/feeds/rss/economia/", category: "economia" },
+  { name: "Infobae",        url: "https://www.infobae.com/feeds/rss/deportes/", category: "deportes" },
+  { name: "Infobae",        url: "https://www.infobae.com/feeds/rss/america/",  category: "mundo"    },
+  { name: "Infobae",        url: "https://www.infobae.com/feeds/rss/tecno/",    category: "tecnologia" },
+  { name: "Infobae",        url: "https://www.infobae.com/feeds/rss/salud/",    category: "salud"    },
+
+  // ── ÁMBITO ────────────────────────────────────────────────────────────────
+  { name: "Ámbito",         url: "https://www.ambito.com/rss/pages/home.xml",      category: "economia" },
+  { name: "Ámbito",         url: "https://www.ambito.com/rss/pages/economia.xml",  category: "economia" },
+  { name: "Ámbito",         url: "https://www.ambito.com/rss/pages/finanzas.xml",  category: "economia" },
+  { name: "Ámbito",         url: "https://www.ambito.com/rss/pages/politica.xml",  category: "politica" },
+  { name: "Ámbito",         url: "https://www.ambito.com/rss/pages/negocios.xml",  category: "economia" },
+
+  // ── EL CRONISTA ───────────────────────────────────────────────────────────
+  { name: "El Cronista",    url: "https://www.cronista.com/files/rss/cronista.xml",          category: "economia" },
+  { name: "El Cronista",    url: "https://www.cronista.com/files/rss/finanzas-mercados.xml", category: "economia" },
+  { name: "El Cronista",    url: "https://www.cronista.com/files/rss/economiapolitica.xml",  category: "politica" },
+
+  // ── PÁGINA 12 ─────────────────────────────────────────────────────────────
+  { name: "Página 12",      url: "https://www.pagina12.com.ar/rss/portada",               category: "general"  },
+  { name: "Página 12",      url: "https://www.pagina12.com.ar/rss/secciones/el-pais",     category: "politica" },
+  { name: "Página 12",      url: "https://www.pagina12.com.ar/rss/secciones/economia",    category: "economia" },
+  { name: "Página 12",      url: "https://www.pagina12.com.ar/rss/secciones/el-mundo",    category: "mundo"    },
+
+  // ── iPROFESIONAL ──────────────────────────────────────────────────────────
+  { name: "iProfesional",   url: "https://www.iprofesional.com/rss/",                     category: "economia" },
+  { name: "iProfesional",   url: "https://www.iprofesional.com/rss/finanzas",             category: "economia" },
+  { name: "iProfesional",   url: "https://www.iprofesional.com/rss/tecnologia",           category: "tecnologia" },
+  { name: "iProfesional",   url: "https://www.iprofesional.com/rss/negocios",             category: "economia" },
+
+  // ── PERFIL ────────────────────────────────────────────────────────────────
+  { name: "Perfil",         url: "https://www.perfil.com/rss/",                           category: "general"  },
+  { name: "Perfil",         url: "https://www.perfil.com/rss/economia",                   category: "economia" },
+  { name: "Perfil",         url: "https://www.perfil.com/rss/politica",                   category: "politica" },
+
+  // ── TN (Todo Noticias) ────────────────────────────────────────────────────
+  { name: "TN",             url: "https://tn.com.ar/rss/",                                category: "general"  },
+  { name: "TN",             url: "https://tn.com.ar/rss/economia",                        category: "economia" },
+  { name: "TN",             url: "https://tn.com.ar/rss/politica",                        category: "politica" },
+  { name: "TN",             url: "https://tn.com.ar/rss/deportes",                        category: "deportes" },
+
+  // ── TÉLAM (agencia oficial) ───────────────────────────────────────────────
+  { name: "Télam",          url: "https://www.telam.com.ar/rss/",                         category: "general"  },
+  { name: "Télam",          url: "https://www.telam.com.ar/rss/economia.xml",             category: "economia" },
+  { name: "Télam",          url: "https://www.telam.com.ar/rss/politica.xml",             category: "politica" },
+
+  // ── EL DESTAPE ────────────────────────────────────────────────────────────
+  { name: "El Destape",     url: "https://www.eldestapeweb.com/rss",                      category: "general"  },
+
+  // ── MDZ ONLINE (Mendoza + nacional) ──────────────────────────────────────
+  { name: "MDZ",            url: "https://www.mdzol.com/rss/",                            category: "general"  },
+  { name: "MDZ",            url: "https://www.mdzol.com/rss/economia",                    category: "economia" },
 ]
 
 interface NewsArticle {
@@ -187,13 +254,12 @@ async function cronLogFinish(id: number | undefined, ok: boolean, details?: stri
 
 // ---------- INGEST core ----------
 async function doIngest() {
-  const articles: NewsArticle[] = []
-
-  for (const feed of RSS_FEEDS) {
-    const items = await parseRSS(feed.url)
-
-    for (const item of items) {
-      articles.push({
+  // Todos los feeds en paralelo — en lugar de secuencial.
+  // Con 45 feeds en serie esto tomaría ~45s; en paralelo toma lo que tarde el feed más lento (~3-5s).
+  const results = await Promise.allSettled(
+    RSS_FEEDS.map(async (feed) => {
+      const items = await parseRSS(feed.url)
+      return items.map((item) => ({
         source: feed.name,
         sourceUrl: feed.url,
         title: item.title,
@@ -202,12 +268,34 @@ async function doIngest() {
         link: item.link,
         category: feed.category,
         publishedAt: item.publishedAt,
-      })
+      } as NewsArticle))
+    })
+  )
+
+  const articles: NewsArticle[] = []
+  let feedsOk = 0
+  let feedsFailed = 0
+
+  for (const result of results) {
+    if (result.status === "fulfilled") {
+      articles.push(...result.value)
+      if (result.value.length > 0) feedsOk++
+      else feedsFailed++ // respondió pero vacío (también cuenta como fallo suave)
+    } else {
+      feedsFailed++
     }
   }
 
+  // Deduplicar por link antes de insertar (distintos feeds pueden traer la misma nota)
+  const seen = new Set<string>()
+  const unique = articles.filter((a) => {
+    if (!a.link || seen.has(a.link)) return false
+    seen.add(a.link)
+    return true
+  })
+
   if (!process.env.DATABASE_URL) {
-    return { ok: true, mode: "ingest", articlesProcessed: articles.length, inserted: 0, sources: RSS_FEEDS.length }
+    return { ok: true, mode: "ingest", articlesProcessed: unique.length, inserted: 0, feedsOk, feedsFailed }
   }
 
   const { neon } = await import("@neondatabase/serverless")
@@ -215,26 +303,31 @@ async function doIngest() {
 
   let inserted = 0
 
-  for (const article of articles) {
-    const importance = calculateImportance(article.title, article.category, article.source)
-
-    const r = await sql`
-      INSERT INTO news_articles (
-        source, source_url, title, summary, content, link, category, published_at,
-        content_status, importance_score
-      )
-      VALUES (
-        ${article.source}, ${article.sourceUrl}, ${article.title}, ${article.summary},
-        ${article.content}, ${article.link}, ${article.category},
-        ${article.publishedAt?.toISOString() || null},
-        'pending',
-        ${importance}
-      )
-      ON CONFLICT (link) DO NOTHING
-      RETURNING id
-    `.catch(() => [])
-
-    if (Array.isArray(r) && r.length > 0) inserted++
+  // Insertar en lotes para no saturar Neon con demasiadas conexiones simultáneas
+  const BATCH = 20
+  for (let i = 0; i < unique.length; i += BATCH) {
+    const batch = unique.slice(i, i + BATCH)
+    await Promise.all(
+      batch.map(async (article) => {
+        const importance = calculateImportance(article.title, article.category, article.source)
+        const r = await sql`
+          INSERT INTO news_articles (
+            source, source_url, title, summary, content, link, category, published_at,
+            content_status, importance_score
+          )
+          VALUES (
+            ${article.source}, ${article.sourceUrl}, ${article.title}, ${article.summary},
+            ${article.content}, ${article.link}, ${article.category},
+            ${article.publishedAt?.toISOString() || null},
+            'pending',
+            ${importance}
+          )
+          ON CONFLICT (link) DO NOTHING
+          RETURNING id
+        `.catch(() => [])
+        if (Array.isArray(r) && r.length > 0) inserted++
+      })
+    )
   }
 
   await sql`DELETE FROM news_articles WHERE fetched_at < NOW() - INTERVAL '7 days'`
@@ -242,9 +335,11 @@ async function doIngest() {
   return {
     ok: true,
     mode: "ingest",
-    articlesProcessed: articles.length,
+    articlesProcessed: unique.length,
     inserted,
-    sources: RSS_FEEDS.length,
+    feedsOk,
+    feedsFailed,
+    totalFeeds: RSS_FEEDS.length,
   }
 }
 
@@ -348,7 +443,18 @@ export async function GET(request: Request) {
     const runId = await cronLogStart("news_ingest:cron")
 
     try {
-      const result = await doIngest()
+      const ingestResult = await doIngest()
+
+      // Auto-enrich: enriquece hasta 12 artículos pendientes después de cada ingest.
+      // Lo corremos siempre pero no bloqueamos el response si falla.
+      let enrichResult: Awaited<ReturnType<typeof enrichPendingArticles>> | null = null
+      try {
+        enrichResult = await enrichPendingArticles(12)
+      } catch (e) {
+        console.error("Auto-enrich failed (non-fatal):", e)
+      }
+
+      const result = { ...ingestResult, enrich: enrichResult ?? { processed: 0, ok: 0, blocked: 0, error: 0 } }
       await cronLogFinish(runId, true, "ok", result)
       return NextResponse.json({ ...result, timestamp: new Date().toISOString() })
     } catch (e: any) {
@@ -373,9 +479,9 @@ export async function GET(request: Request) {
       const result = await enrichPendingArticles(safeLimit)
       await cronLogFinish(runId, true, "ok", result)
       return NextResponse.json({
-        ok: true,
         mode: "enrich",
         ...result,
+        ok: true,
         timestamp: new Date().toISOString(),
       })
     } catch (e: any) {
